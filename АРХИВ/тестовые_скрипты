@@ -1,0 +1,245 @@
+"""
+Тестовый скрипт для проверки API endpoints генератора постов.
+Использование: python test_api.py
+"""
+import requests
+import json
+import time
+import sys
+from typing import Dict, Any
+
+# Установка кодировки UTF-8 для Windows
+if sys.platform == 'win32':
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+
+# Конфигурация
+BASE_URL = "http://localhost:8000"
+TEST_EMAIL = "test@example.com"
+TEST_URL = "https://example.com"  # Простой сайт для тестирования
+
+
+def print_section(title: str):
+    """Печать заголовка секции."""
+    print("\n" + "=" * 60)
+    print(f"  {title}")
+    print("=" * 60)
+
+
+def test_health_check() -> bool:
+    """Тест 1: Проверка здоровья сервера."""
+    print_section("ТЕСТ 1: Health Check")
+    try:
+        response = requests.get(f"{BASE_URL}/health", timeout=5)
+        if response.status_code == 200:
+            print("[OK] Сервер работает")
+            print(f"   Ответ: {response.json()}")
+            return True
+        else:
+            print(f"[FAIL] Ошибка: статус {response.status_code}")
+            return False
+    except requests.exceptions.ConnectionError:
+        print("[FAIL] Не удалось подключиться к серверу")
+        print(f"   Убедитесь, что backend запущен на {BASE_URL}")
+        return False
+    except Exception as e:
+        print(f"[FAIL] Ошибка: {e}")
+        return False
+
+
+def test_root_endpoint() -> bool:
+    """Тест 2: Проверка корневого endpoint."""
+    print_section("ТЕСТ 2: Root Endpoint")
+    try:
+        response = requests.get(f"{BASE_URL}/", timeout=5)
+        if response.status_code == 200:
+            print("[OK] Корневой endpoint работает")
+            print(f"   Ответ: {response.json()}")
+            return True
+        else:
+            print(f"[FAIL] Ошибка: статус {response.status_code}")
+            return False
+    except Exception as e:
+        print(f"[FAIL] Ошибка: {e}")
+        return False
+
+
+def test_session_check(email: str) -> bool:
+    """Тест 3: Проверка сеанса."""
+    print_section("ТЕСТ 3: Session Check")
+    try:
+        response = requests.get(
+            f"{BASE_URL}/session/check/{email}",
+            timeout=5
+        )
+        print(f"   Статус: {response.status_code}")
+        print(f"   Ответ: {json.dumps(response.json(), indent=2, ensure_ascii=False)}")
+        
+        if response.status_code == 200:
+            data = response.json()
+            if data.get("has_session"):
+                print("[OK] Сеанс найден")
+                return True
+            else:
+                print("[INFO] Сеанс не найден (это нормально для нового email)")
+                return True
+        else:
+            print(f"[FAIL] Ошибка: статус {response.status_code}")
+            return False
+    except Exception as e:
+        print(f"[FAIL] Ошибка: {e}")
+        return False
+
+
+def test_chat_endpoint() -> bool:
+    """Тест 4: Проверка chat endpoint."""
+    print_section("ТЕСТ 4: Chat Endpoint")
+    try:
+        payload = {
+            "prompt": "Привет! Ответь одним предложением на русском.",
+            "temperature": 0.0
+        }
+        print(f"   Отправка запроса: {payload['prompt']}")
+        
+        response = requests.post(
+            f"{BASE_URL}/llm/chat",
+            json=payload,
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            print("[OK] Chat endpoint работает")
+            print(f"   Ответ: {data.get('text', 'N/A')[:100]}...")
+            return True
+        else:
+            print(f"[FAIL] Ошибка: статус {response.status_code}")
+            print(f"   Детали: {response.text}")
+            return False
+    except requests.exceptions.Timeout:
+        print("[FAIL] Таймаут запроса (возможно, LLM не отвечает)")
+        return False
+    except Exception as e:
+        print(f"[FAIL] Ошибка: {e}")
+        return False
+
+
+def test_chat_json_endpoint() -> bool:
+    """Тест 5: Проверка chat-json endpoint."""
+    print_section("ТЕСТ 5: Chat JSON Endpoint")
+    try:
+        payload = {
+            "system_prompt": "Ты помощник. Отвечай только JSON.",
+            "user_prompt": "Создай JSON с полем 'message' и значением 'Привет'",
+            "temperature": 0.0
+        }
+        print("   Отправка JSON запроса...")
+        
+        response = requests.post(
+            f"{BASE_URL}/llm/chat-json",
+            json=payload,
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            print("[OK] Chat JSON endpoint работает")
+            print(f"   Ответ: {json.dumps(data, indent=2, ensure_ascii=False)}")
+            return True
+        else:
+            print(f"[FAIL] Ошибка: статус {response.status_code}")
+            print(f"   Детали: {response.text}")
+            return False
+    except requests.exceptions.Timeout:
+        print("[FAIL] Таймаут запроса")
+        return False
+    except Exception as e:
+        print(f"[FAIL] Ошибка: {e}")
+        return False
+
+
+def test_analyze_site_without_session() -> bool:
+    """Тест 6: Попытка анализа без сеанса (должна вернуть ошибку)."""
+    print_section("ТЕСТ 6: Analyze Site (без сеанса)")
+    try:
+        payload = {
+            "url": TEST_URL,
+            "email": TEST_EMAIL,
+            "style": "убедительно-позитивном",
+            "occasion": ""
+        }
+        print("   Попытка анализа без активного сеанса...")
+        
+        response = requests.post(
+            f"{BASE_URL}/llm/analyze-site-sync",
+            json=payload,
+            timeout=10
+        )
+        
+        if response.status_code == 403:
+            print("[OK] Правильная обработка: сеанс не найден (403)")
+            print(f"   Сообщение: {response.json().get('detail', 'N/A')}")
+            return True
+        elif response.status_code == 410:
+            print("[OK] Правильная обработка: сеанс истек (410)")
+            return True
+        else:
+            print(f"[WARNING] Неожиданный статус: {response.status_code}")
+            print(f"   Ответ: {response.text}")
+            return False
+    except Exception as e:
+        print(f"[FAIL] Ошибка: {e}")
+        return False
+
+
+def run_all_tests():
+    """Запуск всех тестов."""
+    print("\n" + "=" * 60)
+    print("  ТЕСТИРОВАНИЕ API ГЕНЕРАТОРА ПОСТОВ")
+    print("=" * 60)
+    
+    results = []
+    
+    # Базовые тесты (не требуют сеанса)
+    results.append(("Health Check", test_health_check()))
+    results.append(("Root Endpoint", test_root_endpoint()))
+    results.append(("Session Check", test_session_check(TEST_EMAIL)))
+    
+    # Тесты LLM (требуют API ключи в .env)
+    results.append(("Chat Endpoint", test_chat_endpoint()))
+    results.append(("Chat JSON Endpoint", test_chat_json_endpoint()))
+    
+    # Тест защиты (без сеанса)
+    results.append(("Analyze Site (без сеанса)", test_analyze_site_without_session()))
+    
+    # Итоги
+    print_section("ИТОГИ ТЕСТИРОВАНИЯ")
+    passed = sum(1 for _, result in results if result)
+    total = len(results)
+    
+    for name, result in results:
+        status = "[PASS]" if result else "[FAIL]"
+        print(f"  {status} - {name}")
+    
+    print(f"\n  Результат: {passed}/{total} тестов пройдено")
+    
+    if passed == total:
+        print("\n  [SUCCESS] Все тесты пройдены успешно!")
+    else:
+        print("\n  [WARNING] Некоторые тесты не прошли. Проверьте логи выше.")
+    
+    return passed == total
+
+
+if __name__ == "__main__":
+    try:
+        success = run_all_tests()
+        exit(0 if success else 1)
+    except KeyboardInterrupt:
+        print("\n\n[WARNING] Тестирование прервано пользователем")
+        exit(1)
+    except Exception as e:
+        print(f"\n\n[ERROR] Критическая ошибка: {e}")
+        exit(1)
+
