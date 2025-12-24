@@ -15,8 +15,17 @@ class SessionService:
     """Сервис управления клиентскими сеансами."""
 
     def __init__(self):
-        # W из .env - продолжительность сеанса в минутах (по умолчанию 24 часа = 1440 минут)
+        # Значение по умолчанию для W (будет использоваться, если в Redis нет значения)
         self.default_duration_minutes = int(os.getenv("W", os.getenv("SESSION_DURATION_MINUTES", "1440")))
+    
+    async def _get_w_from_redis(self) -> Optional[int]:
+        """Получить значение W из Redis."""
+        try:
+            from app.services.params_service import params_service
+            w_value = await params_service.get_param("W")
+            return int(w_value) if w_value else None
+        except Exception:
+            return None
 
     def check_session_time(self, session: ClientSession) -> bool:
         """
@@ -108,7 +117,7 @@ class SessionService:
             db.delete(old_session)
             db.commit()
 
-        # Используем значение по умолчанию для W, если не указано
+        # Используем переданное значение W или значение по умолчанию
         if duration_minutes is None:
             duration_minutes = self.default_duration_minutes
         

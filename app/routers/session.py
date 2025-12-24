@@ -35,12 +35,16 @@ async def check_session(
     db: Session = Depends(get_db)
 ) -> SessionCheckResponse:
     """
+    БЛОК 01: ВХОД С ПАРАМЕТРОМ E-mail
     Проверка наличия активного сеанса для email.
     Проверяет наличие записи и время оплаты.
     """
+    # БЛОК 02: ПРОВЕРКА E-mail на наличие в базе
     session = session_service.get_session_by_email(db, email)
 
     if not session:
+        # БЛОК 02: НЕТ -> переход на блок 05 (сообщение об отсутствии оплаченной услуги)
+        # Переход на блок 06: обновление параметров и оплата
         return SessionCheckResponse(
             has_session=False,
             is_active=False,
@@ -51,8 +55,11 @@ async def check_session(
     is_time_valid = session_service.check_session_time(session)
 
     if not is_time_valid:
-        # Время истекло - удаляем запись
+        # БЛОК 03: ПРОВЕРКА ВРЕМЕНИ сеанса: НЕТ (время истекло)
+        # БЛОК 04: УДАЛЕНИЕ ЗАПИСИ из базы
         session_service.delete_session(db, email)
+        # БЛОК 05: Сообщение об отсутствии оплаченной услуги
+        # Переход на блок 06: обновление параметров и оплата
         return SessionCheckResponse(
             has_session=False,
             is_active=False,
@@ -189,18 +196,15 @@ async def delete_session_endpoint(
 ) -> Dict[str, Any]:
     """
     БЛОК 24: УДАЛЕНИЕ КЛИЕНТСКОЙ ЗАПИСИ из базы.
+    ПЕРЕХОД на блок 06: обновление параметров и оплата.
     """
     session = session_service.get_session_by_email(db, email)
     
     if session:
         session_service.delete_session(db, email)
-        return {
-            "status": "ok",
-            "message": "Сеанс удален"
-        }
-    else:
-        return {
-            "status": "ok",
-            "message": "Сеанс не найден"
-        }
+    
+    return {
+        "status": "ok",
+        "message": "Сеанс удален" if session else "Сеанс не найден"
+    }
 

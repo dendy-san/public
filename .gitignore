@@ -59,31 +59,13 @@ dist/
 build/
 
 # Database
-*.db
-*.sqlite
-*.sqlite3
 sessions.db
-data/
+*.db
 
-# Docker volumes (не коммитим данные)
+# Data and exports
+data/
 docker_export/
 
-# Python cache
-__pycache__/
-*.pyc
-
-# Cursor IDE
-.cursor/
-
-# System files
-AppData/
-.ollama/
-.docker/
-.gitconfig
-.lesshst
-.pencil/
-
-
-
-
+# Docker volumes
+redis-data/
 

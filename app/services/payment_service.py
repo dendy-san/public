@@ -1,5 +1,6 @@
 """
 Сервис для работы с оплатой через ЮКассу.
+Параметры ShopID, Ykassa_API и Price берутся из Redis (через params_service).
 """
 import os
 import base64
@@ -12,20 +13,33 @@ class YooKassaPaymentService:
     """Сервис для работы с платежами ЮКассы."""
 
     def __init__(self):
-        self.shop_id = os.getenv("ShopID", "")
-        self.api_key = os.getenv("Ykassa_API", "")
-        # Price из .env (целочисленные рубли)
-        self.price = int(os.getenv("Price", "1000"))
-        
-        if not self.shop_id or not self.api_key:
-            raise ValueError("ShopID и Ykassa_API должны быть заданы в .env")
-        
         # Базовый URL API ЮКассы
         self.base_url = "https://api.yookassa.ru/v3"
+        # Параметры будут загружаться динамически из Redis
+    
+    async def _get_credentials(self):
+        """Получить учетные данные из Redis или .env."""
+        from app.services.params_service import params_service
         
-        # Создаем заголовок авторизации
-        credentials = f"{self.shop_id}:{self.api_key}"
-        self.auth_header = base64.b64encode(credentials.encode()).decode()
+        shop_id = await params_service.get_param("ShopID") or os.getenv("ShopID", "")
+        api_key = await params_service.get_param("Ykassa_API") or os.getenv("Ykassa_API", "")
+        
+        if not shop_id or not api_key:
+            raise ValueError("ShopID и Ykassa_API должны быть заданы в админ-панели или .env")
+        
+        return shop_id, api_key
+    
+    async def _get_price(self) -> int:
+        """Получить цену из Redis или .env."""
+        from app.services.params_service import params_service
+        
+        price_str = await params_service.get_param("Price") or os.getenv("Price", "1000")
+        return int(price_str)
+    
+    def _create_auth_header(self, shop_id: str, api_key: str) -> str:
+        """Создать заголовок авторизации."""
+        credentials = f"{shop_id}:{api_key}"
+        return base64.b64encode(credentials.encode()).decode()
 
     async def create_payment(
         self,
@@ -36,19 +50,34 @@ class YooKassaPaymentService:
     ) -> Dict[str, Any]:
         """
         Создание платежа в ЮКассе.
-        Сумма берется из .env (Price) и не может быть изменена.
+        Все параметры (Price, ShopID, Ykassa_API, W) берутся из Redis (через params_service), при отсутствии - из .env.
         
         Args:
             email: Email клиента
             description: Описание платежа
             return_url: URL для возврата после оплаты
-            duration_minutes: Продолжительность сеанса в минутах (W из .env)
+            duration_minutes: Продолжительность сеанса в минутах (если None, берется W из Redis)
         
         Returns:
             Словарь с данными платежа, включая confirmation_url
         """
-        # Используем фиксированную сумму из .env
-        amount = float(self.price)
+        # Получаем учетные данные и цену из Redis
+        shop_id, api_key = await self._get_credentials()
+        price = await self._get_price()
+        auth_header = self._create_auth_header(shop_id, api_key)
+        
+        # Если duration_minutes не передан, получаем W из Redis
+        if duration_minutes is None:
+            from app.services.params_service import params_service
+            w_value = await params_service.get_param("W")
+            if w_value:
+                duration_minutes = int(w_value)
+            else:
+                # Fallback на .env, если в Redis нет значения
+                duration_minutes = int(os.getenv("W", os.getenv("SESSION_DURATION_MINUTES", "1440")))
+        
+        # Используем цену из Redis
+        amount = float(price)
         if not return_url:
             # По умолчанию используем текущий домен с параметром успешной оплаты
             frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
@@ -72,7 +101,7 @@ class YooKassaPaymentService:
         }
 
         headers = {
-            "Authorization": f"Basic {self.auth_header}",
+            "Authorization": f"Basic {auth_header}",
             "Content-Type": "application/json",
             "Idempotence-Key": f"{email}_{int(os.urandom(4).hex(), 16)}"
         }
@@ -96,8 +125,11 @@ class YooKassaPaymentService:
         Returns:
             Словарь с данными платежа
         """
+        shop_id, api_key = await self._get_credentials()
+        auth_header = self._create_auth_header(shop_id, api_key)
+        
         headers = {
-            "Authorization": f"Basic {self.auth_header}",
+            "Authorization": f"Basic {auth_header}",
         }
 
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -125,12 +157,8 @@ class YooKassaPaymentService:
         return payment_data.get("metadata", {}).get("email")
 
 
-# Глобальный экземпляр сервиса
-try:
-    payment_service = YooKassaPaymentService()
-except ValueError:
-    # Если нет настроек, создаем заглушку
-    payment_service = None
+# Глобальный экземпляр сервиса (без проверки, так как параметры загружаются динамически)
+payment_service = YooKassaPaymentService()
 
 
 

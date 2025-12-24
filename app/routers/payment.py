@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.models.database import get_db
 from app.services.payment_service import payment_service
 from app.services.session_service import session_service
+from app.services.params_service import params_service
 
 
 router = APIRouter()
@@ -16,7 +17,7 @@ router = APIRouter()
 
 class PaymentRequest(BaseModel):
     email: EmailStr
-    # amount и duration_minutes не принимаются от клиента - берутся из .env
+    # amount и duration_minutes не принимаются от клиента - берутся из Redis (админ-панель) или .env
 
 
 class PaymentResponse(BaseModel):
@@ -31,7 +32,8 @@ async def create_payment(
     db: Session = Depends(get_db)
 ) -> PaymentResponse:
     """
-    Создание платежа для клиента.
+    БЛОК 06: Обновление параметров W, Price, Shop ID и Ykassa API из админ-панели (Redis).
+    БЛОК 06: ОПЛАТА - создание платежа в ЮКассе с обновленными параметрами.
     """
     if not payment_service:
         raise HTTPException(
@@ -40,15 +42,20 @@ async def create_payment(
         )
 
     try:
-        # W и Price берутся из .env, не от клиента
-        import os
-        duration_minutes = int(os.getenv("W", os.getenv("SESSION_DURATION_MINUTES", "1440")))
+        # БЛОК 06: Обновление параметров W, Price, Shop ID и Ykassa API значениями из админ-панели (Redis)
+        # Параметры уже находятся в Redis (устанавливаются через админ-панель или инициализируются из .env при старте)
+        # Явно загружаем параметры из Redis перед созданием платежа
+        try:
+            await params_service.get_all_params()  # Загружаем все параметры из Redis
+        except Exception:
+            pass  # Игнорируем ошибки, если Redis недоступен - будут использованы значения из .env
         
-        # Создаем платеж в ЮКассе с фиксированной суммой из .env
+        # БЛОК 06: ОПЛАТА - создание платежа в ЮКассе с параметрами из Redis
+        # payment_service автоматически получает все параметры (W, Price, ShopID, Ykassa_API) из Redis при создании платежа
         payment_data = await payment_service.create_payment(
             email=request.email,
             description=f"Оплата сеанса генерации публикаций для {request.email}",
-            duration_minutes=duration_minutes,
+            duration_minutes=None,  # W будет получен из Redis в payment_service
         )
 
         payment_id = payment_data.get("id")
@@ -107,7 +114,16 @@ async def payment_webhook(
             duration_minutes = int(duration_minutes_str) if duration_minutes_str else None
 
             if email and payment_id:
-                # Создаем или обновляем сеанс клиента
+                # Получаем актуальное значение W из Redis для создания сеанса
+                if duration_minutes is None:
+                    w_value = await params_service.get_param("W")
+                    import os
+                    if w_value:
+                        duration_minutes = int(w_value)
+                    else:
+                        duration_minutes = int(os.getenv("W", os.getenv("SESSION_DURATION_MINUTES", "1440")))
+                
+                # Создаем или обновляем сеанс клиента с актуальными параметрами из Redis
                 session_service.create_session(db, email, payment_id=payment_id, amount=amount, duration_minutes=duration_minutes)
                 return {"status": "ok", "message": "Сеанс создан"}
 
@@ -147,7 +163,18 @@ async def get_payment_status(
             # Получаем продолжительность сеанса (W) из метаданных платежа
             duration_minutes_str = payment_data.get("metadata", {}).get("duration_minutes")
             duration_minutes = int(duration_minutes_str) if duration_minutes_str else None
+            
+            # Если W не было в метаданных, используем значение из Redis (должно быть уже установлено при создании платежа)
+            if duration_minutes is None:
+                w_value = await params_service.get_param("W")
+                import os
+                if w_value:
+                    duration_minutes = int(w_value)
+                else:
+                    duration_minutes = int(os.getenv("W", os.getenv("SESSION_DURATION_MINUTES", "1440")))
+            
             if email:
+                # БЛОК 07: ФОРМИРОВАНИЕ КЛИЕНТСКОЙ ЗАПИСИ в базе с параметрами W и Price из Redis
                 session_service.create_session(db, email, payment_id=payment_id, amount=amount, duration_minutes=duration_minutes)
 
         return {
@@ -166,17 +193,25 @@ async def get_payment_status(
 @router.get("/price")
 async def get_price() -> Dict[str, Any]:
     """
-    Получение фиксированной суммы оплаты из .env (Price).
+    Получение суммы оплаты из Redis (через params_service), при отсутствии - из .env.
     """
-    if not payment_service:
+    try:
+        price = await params_service.get_param("Price")
+        import os
+        if price:
+            price_value = int(price)
+        else:
+            price_value = int(os.getenv("Price", "1000"))
+        
+        return {
+            "price": price_value,
+            "currency": "RUB"
+        }
+    except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail="Сервис оплаты не настроен"
+            detail=f"Ошибка при получении цены: {str(e)}"
         )
-    return {
-        "price": payment_service.price,
-        "currency": "RUB"
-    }
 
 
 
