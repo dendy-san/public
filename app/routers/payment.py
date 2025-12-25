@@ -193,24 +193,34 @@ async def get_payment_status(
 @router.get("/price")
 async def get_price() -> Dict[str, Any]:
     """
-    Получение суммы оплаты из Redis (через params_service), при отсутствии - из .env.
+    Получение суммы оплаты и продолжительности сеанса (W) из Redis (через params_service), при отсутствии - из .env.
     """
     try:
-        price = await params_service.get_param("Price")
         import os
+        
+        # Получаем цену
+        price = await params_service.get_param("Price")
         if price:
             price_value = int(price)
         else:
             price_value = int(os.getenv("Price", "1000"))
         
+        # Получаем продолжительность сеанса (W)
+        w_value = await params_service.get_param("W")
+        if w_value:
+            duration_minutes = int(w_value)
+        else:
+            duration_minutes = int(os.getenv("W", os.getenv("SESSION_DURATION_MINUTES", "1440")))
+        
         return {
             "price": price_value,
-            "currency": "RUB"
+            "currency": "RUB",
+            "duration_minutes": duration_minutes
         }
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Ошибка при получении цены: {str(e)}"
+            detail=f"Ошибка при получении параметров: {str(e)}"
         )
 
 

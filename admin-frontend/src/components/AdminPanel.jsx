@@ -140,13 +140,6 @@ function AdminPanel() {
     Ykassa_API: 'Ykassa API (API ключ ЮКассы)'
   }
 
-  // Функция для маскировки API ключа
-  const maskApiKey = (key) => {
-    if (!key) return ''
-    if (key.length <= 4) return '•'.repeat(key.length)
-    return '•'.repeat(key.length - 4) + key.slice(-4)
-  }
-
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-6">
       <div className="max-w-7xl mx-auto">
@@ -387,7 +380,7 @@ function AdminPanel() {
                             Shop ID: <span className="text-indigo-600">{entry.shop_id}</span>
                           </div>
                           <div className="font-medium text-gray-800">
-                            API Key: <span className="text-indigo-600 font-mono text-sm">{maskApiKey(entry.api_key)}</span>
+                            API Key: <span className="text-indigo-600 font-mono text-sm">{entry.api_key}</span>
                           </div>
                         </div>
                         <span className="text-xs text-gray-500 ml-4">

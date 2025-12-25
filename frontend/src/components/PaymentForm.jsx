@@ -13,27 +13,41 @@ const PaymentForm = ({ email, onPaymentSuccess, onClose, backendUrl = 'http://lo
   const [paymentId, setPaymentId] = useState(null)
   const [isCheckingStatus, setIsCheckingStatus] = useState(false)
 
-  // Конвертация минут в часы с округлением вверх
-  const minutesToHours = (minutes) => {
-    if (!minutes) return 24 // Значение по умолчанию
-    return Math.ceil(minutes / 60)
-  }
-
-  // Получение правильной формы слова "час/часа/часов"
-  const getHoursWord = (hours) => {
-    const hoursStr = hours.toString()
-    const lastDigit = parseInt(hoursStr[hoursStr.length - 1])
-    const lastTwoDigits = hoursStr.length >= 2 ? parseInt(hoursStr.slice(-2)) : lastDigit
+  // Форматирование продолжительности: минуты если < 60, иначе часы с округлением вниз
+  const formatDuration = (minutes) => {
+    if (!minutes) return { value: 24, unit: 'часа' } // Значение по умолчанию
+    const minutesNum = parseInt(minutes)
     
-    // Правильное склонение: 1 час, 2-4 часа, 5-20 часов, 21 час, 22-24 часа, и т.д.
-    if (lastTwoDigits >= 11 && lastTwoDigits <= 14) {
-      return 'часов'
-    } else if (lastDigit === 1) {
-      return 'час'
-    } else if (lastDigit >= 2 && lastDigit <= 4) {
-      return 'часа'
+    if (minutesNum < 60) {
+      // Показываем минуты
+      const lastDigit = minutesNum % 10
+      const lastTwoDigits = minutesNum % 100
+      let unit = 'минут'
+      if (lastTwoDigits >= 11 && lastTwoDigits <= 14) {
+        unit = 'минут'
+      } else if (lastDigit === 1) {
+        unit = 'минуту'
+      } else if (lastDigit >= 2 && lastDigit <= 4) {
+        unit = 'минуты'
+      }
+      return { value: minutesNum, unit }
+    } else {
+      // Показываем часы с округлением вниз
+      const hours = Math.floor(minutesNum / 60)
+      const hoursStr = hours.toString()
+      const lastDigit = parseInt(hoursStr[hoursStr.length - 1])
+      const lastTwoDigits = hoursStr.length >= 2 ? parseInt(hoursStr.slice(-2)) : lastDigit
+      
+      let unit = 'часов'
+      if (lastTwoDigits >= 11 && lastTwoDigits <= 14) {
+        unit = 'часов'
+      } else if (lastDigit === 1) {
+        unit = 'час'
+      } else if (lastDigit >= 2 && lastDigit <= 4) {
+        unit = 'часа'
+      }
+      return { value: hours, unit }
     }
-    return 'часов'
   }
 
   // Загружаем цену и продолжительность из Redis при монтировании компонента
@@ -314,9 +328,8 @@ const PaymentForm = ({ email, onPaymentSuccess, onClose, backendUrl = 'http://lo
             <li className="flex items-start">
               <CheckCircle2 className="w-4 h-4 text-green-500 mr-2 mt-0.5 flex-shrink-0" />
               <span>Доступ к генератору постов на {(() => {
-                const hours = durationMinutes !== null ? minutesToHours(durationMinutes) : 24
-                console.log('Display hours:', hours, 'from minutes:', durationMinutes)
-                return `${hours} ${getHoursWord(hours)}`
+                const duration = durationMinutes !== null ? formatDuration(durationMinutes) : { value: 24, unit: 'часа' }
+                return `${duration.value} ${duration.unit}`
               })()}</span>
             </li>
             <li className="flex items-start">
