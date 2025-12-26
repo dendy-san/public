@@ -16,7 +16,8 @@ except ImportError:
     CACHE_AVAILABLE = False
 
 # Тестовый режим: если TEST_MODE=true, возвращаем фиктивные данные вместо реального парсинга и генерации
-TEST_MODE = os.getenv("TEST_MODE", "false").lower() == "true"
+# ВРЕМЕННО ОТКЛЮЧЕНО: для работы с реальными LLM моделями
+TEST_MODE = False  # os.getenv("TEST_MODE", "false").lower() == "true"  # Обходы отключены, но код оставлен для тестирования
 
 
 class SiteAnalyzer:
