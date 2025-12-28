@@ -1,4 +1,4 @@
-# Backend Dockerfile для проекта Public (Production)
+# Backend Dockerfile для проекта Public (универсальный для dev/prod)
 FROM python:3.10-slim
 
 # Установка curl для healthcheck
@@ -16,12 +16,16 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Копирование кода приложения и конфигурации
 COPY app/ ./app/
 COPY gunicorn.conf.py .
+COPY start.sh .
+
+# Делаем start.sh исполняемым
+RUN chmod +x start.sh
 
 # Открытие порта
 EXPOSE 8000
 
-# Запуск приложения через Gunicorn для production
-CMD ["gunicorn", "app.main:app", "-c", "gunicorn.conf.py"]
+# Использование скрипта для запуска (поддерживает dev/prod через ENVIRONMENT)
+CMD ["./start.sh"]
 
 
 

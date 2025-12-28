@@ -1,0 +1,24 @@
+# Файл для переключения в dev режим
+# Скопируйте этот файл в docker-compose.override.yml для локальной разработки
+# docker-compose.override.yml автоматически применяется к docker-compose.yml и НЕ попадает в git
+#
+# Использование:
+# 1. Локальная разработка (dev): скопируйте этот файл в docker-compose.override.yml
+#    Убедитесь, что в .env установлено ENVIRONMENT=dev
+#    Запуск: docker compose up --build
+#
+# 2. Production (prod): убедитесь, что docker-compose.override.yml отсутствует или закомментирован
+#    Убедитесь, что в .env установлено ENVIRONMENT=prod
+#    Запуск: docker compose up --build
+
+version: '3.8'
+
+services:
+  backend:
+    # В dev режиме монтируем код для hot-reload (автоматическая перезагрузка при изменении файлов)
+    volumes:
+      - ./app:/app/app
+    # Переопределяем ENVIRONMENT для dev (если нужно, можно оставить в .env)
+    # environment:
+    #   - ENVIRONMENT=dev
+

@@ -69,3 +69,6 @@ docker_export/
 # Docker volumes
 redis-data/
 
+# Docker override для локальной разработки
+docker-compose.override.yml
+

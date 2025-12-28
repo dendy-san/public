@@ -1,3 +1,8 @@
+# Универсальный docker-compose.yml для dev и prod
+# Режим определяется переменной ENVIRONMENT в .env (dev/prod)
+# Для dev: создайте docker-compose.override.yml с volumes (см. docker-compose.override.yml.example)
+# Запуск: docker compose up --build
+
 services:
   # Redis для кэширования и фоновых задач
   redis:
@@ -17,6 +22,8 @@ services:
       retries: 3
 
   # Backend сервис (FastAPI) - ГИБРИДНЫЙ РЕЖИМ LLM
+  # Режим переключается через переменную ENVIRONMENT в .env (dev/prod)
+  # start.sh автоматически выберет uvicorn (dev) или gunicorn (prod) на основе ENVIRONMENT
   backend:
     build:
       context: .
@@ -26,6 +33,8 @@ services:
       - "8000:8000"
     environment:
       - REDIS_URL=redis://redis:6379
+      # ENVIRONMENT будет браться из .env (dev для разработки, prod для production)
+      # По умолчанию используется prod, если не указано в .env
     env_file:
       - .env
     depends_on:
