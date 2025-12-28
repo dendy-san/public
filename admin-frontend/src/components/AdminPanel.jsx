@@ -387,9 +387,6 @@ function AdminPanel() {
                           {new Date(entry.timestamp).toLocaleString('ru-RU')}
                         </span>
                       </div>
-                      <div className="text-xs text-gray-500">
-                        Источник: {entry.source === 'admin_panel' ? 'Админ-панель' : entry.source === 'initialized_from_env' ? 'Инициализация из .env' : entry.source}
-                      </div>
                     </div>
                   ))
                 ) : (
@@ -414,9 +411,6 @@ function AdminPanel() {
                         <span className="text-xs text-gray-500">
                           {new Date(entry.timestamp).toLocaleString('ru-RU')}
                         </span>
-                      </div>
-                      <div className="text-xs text-gray-500">
-                        Источник: {entry.source === 'admin_panel' ? 'Админ-панель' : entry.source === 'initialized_from_env' ? 'Инициализация из .env' : entry.source}
                       </div>
                     </div>
                   ))
