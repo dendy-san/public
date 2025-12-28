@@ -140,3 +140,4 @@ docker compose ps -a
 netstat -tulpn | grep -E '3000|8000|3001'
 ```
 
+
