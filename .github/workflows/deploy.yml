@@ -10,7 +10,7 @@ jobs:
   deploy:
     name: Deploy to VPS
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -27,7 +27,7 @@ jobs:
           chmod 600 ~/.ssh/known_hosts
 
       - name: Отправка Telegram уведомления - Начало деплоя
-        if: secrets.TELEGRAM_BOT_TOKEN != '' && secrets.TELEGRAM_CHAT_ID != ''
+        if: ${{ secrets.TELEGRAM_BOT_TOKEN != '' && secrets.TELEGRAM_CHAT_ID != '' }}
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -48,11 +48,11 @@ jobs:
         run: |
           echo "💾 Сохранение текущей версии перед деплоем..."
           CURRENT_COMMIT=$(git rev-parse HEAD)
-          
+
           ssh -p $VPS_SSH_PORT -o StrictHostKeyChecking=no $VPS_USER@$VPS_HOST bash << EOF
             PROJECT_PATH="$VPS_PROJECT_PATH"
             cd "\$PROJECT_PATH" || exit 1
-            
+
             # Сохраняем текущий коммит в файл .previous_version
             CURRENT_COMMIT=\$(git rev-parse HEAD 2>/dev/null || echo "")
             if [ -n "\$CURRENT_COMMIT" ]; then
@@ -71,27 +71,27 @@ jobs:
           VPS_PROJECT_PATH: ${{ secrets.VPS_PROJECT_PATH || '~/public' }}
         run: |
           echo "🚀 Начало деплоя на VPS..."
-          
+
           # Выполнение команд деплоя через SSH с передачей переменных
           ssh -p $VPS_SSH_PORT -o StrictHostKeyChecking=no $VPS_USER@$VPS_HOST bash << EOF
             set -e  # Остановка при ошибках
-            
+
             PROJECT_PATH="$VPS_PROJECT_PATH"
-            
+
             # Переход в директорию проекта
             cd "\$PROJECT_PATH" || {
               echo "❌ Ошибка: не удалось перейти в директорию \$PROJECT_PATH"
               exit 1
             }
-            
+
             echo "📂 Текущая директория: \$(pwd)"
-            
+
             # Проверка наличия docker-compose.yml
             if [ ! -f "docker-compose.yml" ]; then
               echo "❌ Ошибка: docker-compose.yml не найден в \$(pwd)"
               exit 1
             fi
-            
+
             # Шаг 1: Получение последних изменений из Git
             echo "📥 Получение изменений из Git..."
             git fetch origin || {
@@ -103,11 +103,11 @@ jobs:
               exit 1
             }
             echo "✅ Код обновлен из репозитория"
-            
+
             # Шаг 2: Остановка текущих контейнеров
             echo "🛑 Остановка текущих контейнеров..."
             docker compose down || echo "⚠️  Контейнеры не были запущены или уже остановлены"
-            
+
             # Шаг 3: Пересборка образов
             echo "🔨 Пересборка Docker образов..."
             docker compose build --no-cache || {
@@ -116,7 +116,7 @@ jobs:
               exit 1
             }
             echo "✅ Образы пересобраны"
-            
+
             # Шаг 4: Запуск контейнеров
             echo "🚀 Запуск контейнеров..."
             docker compose up -d || {
@@ -125,15 +125,15 @@ jobs:
               exit 1
             }
             echo "✅ Контейнеры запущены"
-            
+
             # Шаг 5: Ожидание запуска сервисов
             echo "⏳ Ожидание запуска сервисов (60 секунд)..."
             sleep 60
-            
+
             # Шаг 6: Проверка статуса контейнеров
             echo "🔍 Проверка статуса контейнеров..."
             docker compose ps
-            
+
             echo "✅ Деплой на VPS завершен"
           EOF
 
@@ -146,7 +146,7 @@ jobs:
           echo "🏥 Проверка здоровья Backend..."
           max_attempts=30
           attempt=1
-          
+
           while [ $attempt -le $max_attempts ]; do
             if curl -f -s --max-time 5 "http://$VPS_HOST:$BACKEND_PORT/health" > /dev/null 2>&1; then
               echo "✅ Backend здоров (попытка $attempt/$max_attempts)"
@@ -157,7 +157,7 @@ jobs:
             sleep 2
             attempt=$((attempt + 1))
           done
-          
+
           echo "❌ Backend не отвечает после $max_attempts попыток"
           echo "backend_status=failed" >> $GITHUB_OUTPUT
           exit 1
@@ -171,7 +171,7 @@ jobs:
           echo "🏥 Проверка здоровья Frontend..."
           max_attempts=30
           attempt=1
-          
+
           while [ $attempt -le $max_attempts ]; do
             if curl -f -s --max-time 5 "http://$VPS_HOST:$FRONTEND_PORT" > /dev/null 2>&1; then
               echo "✅ Frontend доступен (попытка $attempt/$max_attempts)"
@@ -182,7 +182,7 @@ jobs:
             sleep 2
             attempt=$((attempt + 1))
           done
-          
+
           echo "❌ Frontend не отвечает после $max_attempts попыток"
           echo "frontend_status=failed" >> $GITHUB_OUTPUT
           exit 1
@@ -196,7 +196,7 @@ jobs:
           echo "🏥 Проверка здоровья Admin Frontend..."
           max_attempts=30
           attempt=1
-          
+
           while [ $attempt -le $max_attempts ]; do
             if curl -f -s --max-time 5 "http://$VPS_HOST:$ADMIN_FRONTEND_PORT" > /dev/null 2>&1; then
               echo "✅ Admin Frontend доступен (попытка $attempt/$max_attempts)"
@@ -207,7 +207,7 @@ jobs:
             sleep 2
             attempt=$((attempt + 1))
           done
-          
+
           echo "❌ Admin Frontend не отвечает после $max_attempts попыток"
           echo "admin_status=failed" >> $GITHUB_OUTPUT
           exit 1
@@ -228,7 +228,7 @@ jobs:
           EOF
 
       - name: Отправка Telegram уведомления - Успешный деплой
-        if: success() && secrets.TELEGRAM_BOT_TOKEN != '' && secrets.TELEGRAM_CHAT_ID != ''
+        if: ${{ success() && secrets.TELEGRAM_BOT_TOKEN != '' && secrets.TELEGRAM_CHAT_ID != '' }}
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -250,7 +250,7 @@ jobs:
           VPS_PROJECT_PATH: ${{ secrets.VPS_PROJECT_PATH || '~/public' }}
         run: |
           echo "🔄 Начало автоматического отката к предыдущей версии..."
-          
+
           ssh -p $VPS_SSH_PORT -o StrictHostKeyChecking=no $VPS_USER@$VPS_HOST bash << EOF
             set +e  # Не останавливаемся при ошибках, чтобы продолжить выполнение
             PROJECT_PATH="$VPS_PROJECT_PATH"
@@ -258,21 +258,21 @@ jobs:
               echo "❌ Ошибка: не удалось перейти в директорию \$PROJECT_PATH"
               exit 1
             }
-            
+
             # Проверяем наличие файла с предыдущей версией
             if [ ! -f ".previous_version" ]; then
               echo "⚠️  Файл .previous_version не найден, откат невозможен"
               exit 0  # Выходим без ошибки, так как это не критично
             fi
-            
+
             PREVIOUS_COMMIT=\$(cat .previous_version)
             if [ -z "\$PREVIOUS_COMMIT" ]; then
               echo "⚠️  Предыдущая версия не найдена в .previous_version"
               exit 0  # Выходим без ошибки, так как это не критично
             fi
-            
+
             echo "📦 Откат к коммиту: \$(echo \$PREVIOUS_COMMIT | cut -c1-7)"
-            
+
             # Откатываем код к предыдущей версии
             git fetch origin || {
               echo "❌ Ошибка при выполнении git fetch"
@@ -283,33 +283,33 @@ jobs:
               exit 1
             }
             echo "✅ Код откачен к предыдущей версии"
-            
+
             # Останавливаем контейнеры
             echo "🛑 Остановка контейнеров..."
             docker compose down || echo "⚠️  Контейнеры уже остановлены"
-            
+
             # Пересобираем образы для предыдущей версии
             echo "🔨 Пересборка образов предыдущей версии..."
             docker compose build --no-cache || {
               echo "❌ Ошибка при пересборке образов"
               exit 1
             }
-            
+
             # Запускаем контейнеры
             echo "🚀 Запуск контейнеров предыдущей версии..."
             docker compose up -d || {
               echo "❌ Ошибка при запуске контейнеров"
               exit 1
             }
-            
+
             echo "⏳ Ожидание запуска сервисов (60 секунд)..."
             sleep 60
-            
+
             echo "✅ Откат к предыдущей версии завершен"
           EOF
 
       - name: Отправка Telegram уведомления - Ошибка деплоя с откатом
-        if: failure() && secrets.TELEGRAM_BOT_TOKEN != '' && secrets.TELEGRAM_CHAT_ID != ''
+        if: ${{ failure() && secrets.TELEGRAM_BOT_TOKEN != '' && secrets.TELEGRAM_CHAT_ID != '' }}
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -320,10 +320,10 @@ jobs:
         run: |
           COMMIT_SHA=$(git rev-parse --short HEAD)
           COMMIT_MSG=$(git log -1 --pretty=%B)
-          
+
           # Проверяем, был ли выполнен откат (проверяем наличие файла на VPS)
           ROLLBACK_STATUS="🔄 Откат выполнен к предыдущей версии"
-          
+
           curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
             -d chat_id="${TELEGRAM_CHAT_ID}" \
             -d text="❌ Деплой не удался%0A%0A📦 Коммит: ${COMMIT_SHA}%0A📝 Сообщение: ${COMMIT_MSG}%0A🌐 VPS: ${VPS_HOST}%0A%0A${ROLLBACK_STATUS}" \
@@ -347,4 +347,3 @@ jobs:
           echo "Проверьте логи выше для выяснения причины ошибки." >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "🔄 Автоматический откат к предыдущей версии выполнен (если была сохранена предыдущая версия)." >> $GITHUB_STEP_SUMMARY
-
