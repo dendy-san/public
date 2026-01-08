@@ -122,3 +122,11 @@ Frontend и Admin Frontend всегда собираются в production ре�
 - Пересоберите образ: `docker compose build backend`
 - Перезапустите: `docker compose up -d backend`
 
+
+
+
+
+
+
+
+
