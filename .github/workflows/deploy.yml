@@ -72,7 +72,6 @@ jobs:
           VPS_PROJECT_PATH: ${{ secrets.VPS_PROJECT_PATH }}
         run: |
           VPS_SSH_PORT=${VPS_SSH_PORT:-22}
-          VPS_PROJECT_PATH=${VPS_PROJECT_PATH:-~/public}
           
           # Проверка обязательных переменных
           if [ -z "$VPS_HOST" ] || [ -z "$VPS_USER" ]; then
@@ -88,8 +87,9 @@ jobs:
           VPS_HOST=$(echo "$VPS_HOST" | tr -d '[:space:]')
           VPS_USER=$(echo "$VPS_USER" | tr -d '[:space:]')
           
+          # Используем $HOME/public вместо ~/public (тильда не раскрывается в SSH команде)
           ssh -p "$VPS_SSH_PORT" "$VPS_USER@$VPS_HOST" \
-            "cd $VPS_PROJECT_PATH && git rev-parse HEAD > .previous_version 2>/dev/null || echo 'Нет предыдущей версии'" || echo "⚠️ Не удалось сохранить версию (не критично)"
+            "cd \${HOME}/public && git rev-parse HEAD > .previous_version 2>/dev/null || echo 'Нет предыдущей версии'" || echo "⚠️ Не удалось сохранить версию (не критично)"
 
       # Шаг 6: Отправка уведомления о начале деплоя (Telegram, опционально)
       - name: Send deployment start notification
@@ -117,7 +117,7 @@ jobs:
           VPS_PROJECT_PATH: ${{ secrets.VPS_PROJECT_PATH }}
         run: |
           VPS_SSH_PORT=${VPS_SSH_PORT:-22}
-          VPS_PROJECT_PATH=${VPS_PROJECT_PATH:-~/public}
+          VPS_PROJECT_PATH=${VPS_PROJECT_PATH:-$HOME/public}
           echo "🚀 Начало деплоя на VPS..."
           echo "📍 Целевой сервер: $VPS_USER@$VPS_HOST:$VPS_SSH_PORT"
           echo "📁 Путь к проекту: $VPS_PROJECT_PATH"
@@ -132,8 +132,9 @@ jobs:
           VPS_HOST=$(echo "$VPS_HOST" | tr -d '[:space:]')
           VPS_USER=$(echo "$VPS_USER" | tr -d '[:space:]')
           
-          # Выполнение деплоя через SSH (передача команды как аргумент)
-          ssh -p "$VPS_SSH_PORT" "$VPS_USER@$VPS_HOST" "cd $VPS_PROJECT_PATH && \
+          # Преобразуем ~ в $HOME если есть (для передачи в SSH)
+          # В SSH команде используем $HOME напрямую
+          ssh -p "$VPS_SSH_PORT" "$VPS_USER@$VPS_HOST" "cd \${HOME}/public && \
             echo '📥 Обновление кода из репозитория...' && \
             git fetch origin main && \
             git reset --hard origin/main && \
@@ -262,7 +263,6 @@ jobs:
           VPS_PROJECT_PATH: ${{ secrets.VPS_PROJECT_PATH }}
         run: |
           VPS_SSH_PORT=${VPS_SSH_PORT:-22}
-          VPS_PROJECT_PATH=${VPS_PROJECT_PATH:-~/public}
           
           # Проверка обязательных переменных
           if [ -z "$VPS_HOST" ] || [ -z "$VPS_USER" ]; then
@@ -276,7 +276,7 @@ jobs:
           
           echo "🔄 Начало rollback к предыдущей версии..."
           
-          ssh -p "$VPS_SSH_PORT" "$VPS_USER@$VPS_HOST" "cd $VPS_PROJECT_PATH && \
+          ssh -p "$VPS_SSH_PORT" "$VPS_USER@$VPS_HOST" "cd \${HOME}/public && \
             if [ -f .previous_version ]; then \
               PREVIOUS_COMMIT=\$(cat .previous_version) && \
               echo '📦 Откат к коммиту:' \$PREVIOUS_COMMIT && \
