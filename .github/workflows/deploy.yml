@@ -87,16 +87,10 @@ jobs:
           VPS_HOST=$(echo "$VPS_HOST" | tr -d '[:space:]')
           VPS_USER=$(echo "$VPS_USER" | tr -d '[:space:]')
           
-          # Используем $HOME/public вместо ~/public (тильда не раскрывается в SSH команде)
-          # Если в секрете указан путь с ~, заменяем на $HOME
-          PROJECT_PATH="\${HOME}/public"
-          if [ -n "$VPS_PROJECT_PATH" ]; then
-            # Заменяем ~ на $HOME в пути
-            PROJECT_PATH=$(echo "$VPS_PROJECT_PATH" | sed "s|^~|\${HOME}|")
-          fi
-          
+          # Всегда используем ${HOME}/public в SSH команде (тильда не раскрывается в SSH)
+          # Игнорируем секрет VPS_PROJECT_PATH для надежности
           ssh -p "$VPS_SSH_PORT" "$VPS_USER@$VPS_HOST" \
-            "cd $PROJECT_PATH && git rev-parse HEAD > .previous_version 2>/dev/null || echo 'Нет предыдущей версии'" || echo "⚠️ Не удалось сохранить версию (не критично)"
+            "cd \${HOME}/public && git rev-parse HEAD > .previous_version 2>/dev/null || echo 'Нет предыдущей версии'" || echo "⚠️ Не удалось сохранить версию (не критично)"
 
       # Шаг 6: Отправка уведомления о начале деплоя (Telegram, опционально)
       - name: Send deployment start notification
@@ -137,16 +131,11 @@ jobs:
           VPS_HOST=$(echo "$VPS_HOST" | tr -d '[:space:]')
           VPS_USER=$(echo "$VPS_USER" | tr -d '[:space:]')
           
-          # Определяем путь к проекту (по умолчанию $HOME/public)
-          # Если в секрете указан путь с ~, заменяем на $HOME
-          PROJECT_PATH="\${HOME}/public"
-          if [ -n "$VPS_PROJECT_PATH" ]; then
-            # Заменяем ~ на $HOME в пути для использования в SSH команде
-            PROJECT_PATH=$(echo "$VPS_PROJECT_PATH" | sed "s|^~|\${HOME}|")
-          fi
-          echo "📁 Путь к проекту: $PROJECT_PATH"
+          # Всегда используем ${HOME}/public в SSH команде (тильда не раскрывается в SSH)
+          # Игнорируем секрет VPS_PROJECT_PATH для надежности
+          echo "📁 Путь к проекту: \${HOME}/public"
           
-          ssh -p "$VPS_SSH_PORT" "$VPS_USER@$VPS_HOST" "cd $PROJECT_PATH && \
+          ssh -p "$VPS_SSH_PORT" "$VPS_USER@$VPS_HOST" "cd \${HOME}/public && \
             echo '📥 Обновление кода из репозитория...' && \
             git fetch origin main && \
             git reset --hard origin/main && \
@@ -286,17 +275,11 @@ jobs:
           VPS_HOST=$(echo "$VPS_HOST" | tr -d '[:space:]')
           VPS_USER=$(echo "$VPS_USER" | tr -d '[:space:]')
           
-          # Определяем путь к проекту (по умолчанию $HOME/public)
-          # Если в секрете указан путь с ~, заменяем на $HOME
-          PROJECT_PATH="\${HOME}/public"
-          if [ -n "$VPS_PROJECT_PATH" ]; then
-            # Заменяем ~ на $HOME в пути для использования в SSH команде
-            PROJECT_PATH=$(echo "$VPS_PROJECT_PATH" | sed "s|^~|\${HOME}|")
-          fi
-          
+          # Всегда используем ${HOME}/public в SSH команде (тильда не раскрывается в SSH)
+          # Игнорируем секрет VPS_PROJECT_PATH для надежности
           echo "🔄 Начало rollback к предыдущей версии..."
           
-          ssh -p "$VPS_SSH_PORT" "$VPS_USER@$VPS_HOST" "cd $PROJECT_PATH && \
+          ssh -p "$VPS_SSH_PORT" "$VPS_USER@$VPS_HOST" "cd \${HOME}/public && \
             if [ -f .previous_version ]; then \
               PREVIOUS_COMMIT=\$(cat .previous_version) && \
               echo '📦 Откат к коммиту:' \$PREVIOUS_COMMIT && \
