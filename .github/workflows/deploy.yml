@@ -346,24 +346,6 @@ jobs:
                 echo '⚠️ Предыдущая версия не найдена, rollback невозможен'; \
               fi"
           fi
-          else
-            ssh -p "$VPS_SSH_PORT" "$VPS_USER@$VPS_HOST" "cd \${HOME}/public && \
-              if [ -f .previous_version ]; then \
-                PREVIOUS_COMMIT=\$(cat .previous_version) && \
-                echo '📦 Откат к коммиту:' \$PREVIOUS_COMMIT && \
-                git fetch origin main && \
-                git reset --hard \$PREVIOUS_COMMIT || git reset --hard origin/main~1 || true && \
-                echo '🛑 Остановка контейнеров...' && \
-                docker compose down || true && \
-                echo '🔨 Пересборка образов...' && \
-                docker compose build --no-cache && \
-                echo '🚀 Запуск предыдущей версии...' && \
-                docker compose up -d && \
-                echo '✅ Rollback завершен'; \
-              else \
-                echo '⚠️ Предыдущая версия не найдена, rollback невозможен'; \
-              fi"
-          fi
 
       # Шаг 14: Отправка уведомления об ошибке деплоя (Telegram, опционально)
       - name: Send deployment failure notification
