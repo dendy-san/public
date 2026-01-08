@@ -81,27 +81,23 @@ jobs:
           
           # Отладочный вывод
           echo "💾 Сохранение текущего коммита для rollback..."
-          echo "📍 Подключение к: $VPS_USER@$VPS_HOST:$VPS_SSH_PORT"
           
           # Удаляем возможные пробелы и лишние символы из переменных
           VPS_HOST=$(echo "$VPS_HOST" | tr -d '[:space:]')
           VPS_USER=$(echo "$VPS_USER" | tr -d '[:space:]')
           
           # Отладочный вывод для диагностики
-          echo "🔍 DEBUG: VPS_USER после очистки = '$VPS_USER'"
+          echo "🔍 DEBUG: VPS_HOST = '$VPS_HOST'"
+          echo "🔍 DEBUG: VPS_USER = '$VPS_USER'"
+          echo "🔍 DEBUG: VPS_SSH_PORT = '$VPS_SSH_PORT'"
+          echo "📍 Подключение к: $VPS_USER@$VPS_HOST:$VPS_SSH_PORT"
           echo "🔍 DEBUG: Проверка равенства 'root': $([ "$VPS_USER" = "root" ] && echo 'ДА' || echo 'НЕТ')"
           
-          # Используем абсолютный путь /root/public для root пользователя
-          # Прямо указываем путь в SSH команде для надежности
-          if [ "$VPS_USER" = "root" ]; then
-            echo "✅ Используется путь: /root/public"
-            ssh -p "$VPS_SSH_PORT" "$VPS_USER@$VPS_HOST" \
-              "cd /root/public && git rev-parse HEAD > .previous_version 2>/dev/null || echo 'Нет предыдущей версии'" || echo "⚠️ Не удалось сохранить версию (не критично)"
-          else
-            echo "✅ Используется путь: \${HOME}/public (пользователь: $VPS_USER)"
-            ssh -p "$VPS_SSH_PORT" "$VPS_USER@$VPS_HOST" \
-              "cd \${HOME}/public && git rev-parse HEAD > .previous_version 2>/dev/null || echo 'Нет предыдущей версии'" || echo "⚠️ Не удалось сохранить версию (не критично)"
-          fi
+          # Всегда используем абсолютный путь /root/public (предполагаем, что пользователь = root)
+          # Это упрощает код и избегает проблем с раскрытием переменных
+          echo "✅ Используется путь: /root/public"
+          ssh -p "$VPS_SSH_PORT" "$VPS_USER@$VPS_HOST" \
+            "cd /root/public && git rev-parse HEAD > .previous_version 2>/dev/null || echo 'Нет предыдущей версии'" || echo "⚠️ Не удалось сохранить версию (не критично)"
 
       # Шаг 6: Отправка уведомления о начале деплоя (Telegram, опционально)
       - name: Send deployment start notification
@@ -142,39 +138,21 @@ jobs:
           VPS_HOST=$(echo "$VPS_HOST" | tr -d '[:space:]')
           VPS_USER=$(echo "$VPS_USER" | tr -d '[:space:]')
           
-          # Используем абсолютный путь /root/public для root пользователя
-          # Прямо указываем путь в SSH команде для надежности
-          if [ "$VPS_USER" = "root" ]; then
-            echo "📁 Путь к проекту: /root/public"
-            ssh -p "$VPS_SSH_PORT" "$VPS_USER@$VPS_HOST" "cd /root/public && \
-              echo '📥 Обновление кода из репозитория...' && \
-              git fetch origin main && \
-              git reset --hard origin/main && \
-              echo '🛑 Остановка текущих контейнеров...' && \
-              docker compose down || true && \
-              echo '🔨 Пересборка Docker образов...' && \
-              docker compose build --no-cache && \
-              echo '🚀 Запуск контейнеров...' && \
-              docker compose up -d && \
-              echo '⏳ Ожидание запуска сервисов (60 секунд)...' && \
-              sleep 60 && \
-              echo '✅ Деплой завершен, проверка здоровья сервисов...'"
-          else
-            echo "📁 Путь к проекту: \${HOME}/public"
-            ssh -p "$VPS_SSH_PORT" "$VPS_USER@$VPS_HOST" "cd \${HOME}/public && \
-              echo '📥 Обновление кода из репозитория...' && \
-              git fetch origin main && \
-              git reset --hard origin/main && \
-              echo '🛑 Остановка текущих контейнеров...' && \
-              docker compose down || true && \
-              echo '🔨 Пересборка Docker образов...' && \
-              docker compose build --no-cache && \
-              echo '🚀 Запуск контейнеров...' && \
-              docker compose up -d && \
-              echo '⏳ Ожидание запуска сервисов (60 секунд)...' && \
-              sleep 60 && \
-              echo '✅ Деплой завершен, проверка здоровья сервисов...'"
-          fi
+          # Всегда используем абсолютный путь /root/public
+          echo "📁 Путь к проекту: /root/public"
+          ssh -p "$VPS_SSH_PORT" "$VPS_USER@$VPS_HOST" "cd /root/public && \
+            echo '📥 Обновление кода из репозитория...' && \
+            git fetch origin main && \
+            git reset --hard origin/main && \
+            echo '🛑 Остановка текущих контейнеров...' && \
+            docker compose down || true && \
+            echo '🔨 Пересборка Docker образов...' && \
+            docker compose build --no-cache && \
+            echo '🚀 Запуск контейнеров...' && \
+            docker compose up -d && \
+            echo '⏳ Ожидание запуска сервисов (60 секунд)...' && \
+            sleep 60 && \
+            echo '✅ Деплой завершен, проверка здоровья сервисов...'"
 
       # Шаг 8: Health check для Backend
       - name: Health check - Backend
@@ -302,50 +280,25 @@ jobs:
           VPS_HOST=$(echo "$VPS_HOST" | tr -d '[:space:]')
           VPS_USER=$(echo "$VPS_USER" | tr -d '[:space:]')
           
-          # Отладочный вывод для диагностики
+          # Всегда используем абсолютный путь /root/public
           echo "🔄 Начало rollback к предыдущей версии..."
-          echo "🔍 DEBUG: VPS_USER после очистки = '$VPS_USER'"
-          echo "🔍 DEBUG: Проверка равенства 'root': $([ "$VPS_USER" = "root" ] && echo 'ДА' || echo 'НЕТ')"
-          
-          # Используем абсолютный путь /root/public для root пользователя
-          # Прямо указываем путь в SSH команде для надежности
-          if [ "$VPS_USER" = "root" ]; then
-            echo "✅ Используется путь: /root/public"
-            ssh -p "$VPS_SSH_PORT" "$VPS_USER@$VPS_HOST" "cd /root/public && \
-              if [ -f .previous_version ]; then \
-                PREVIOUS_COMMIT=\$(cat .previous_version) && \
-                echo '📦 Откат к коммиту:' \$PREVIOUS_COMMIT && \
-                git fetch origin main && \
-                git reset --hard \$PREVIOUS_COMMIT || git reset --hard origin/main~1 || true && \
-                echo '🛑 Остановка контейнеров...' && \
-                docker compose down || true && \
-                echo '🔨 Пересборка образов...' && \
-                docker compose build --no-cache && \
-                echo '🚀 Запуск предыдущей версии...' && \
-                docker compose up -d && \
-                echo '✅ Rollback завершен'; \
-              else \
-                echo '⚠️ Предыдущая версия не найдена, rollback невозможен'; \
-              fi"
-          else
-            echo "✅ Используется путь: \${HOME}/public (пользователь: $VPS_USER)"
-            ssh -p "$VPS_SSH_PORT" "$VPS_USER@$VPS_HOST" "cd \${HOME}/public && \
-              if [ -f .previous_version ]; then \
-                PREVIOUS_COMMIT=\$(cat .previous_version) && \
-                echo '📦 Откат к коммиту:' \$PREVIOUS_COMMIT && \
-                git fetch origin main && \
-                git reset --hard \$PREVIOUS_COMMIT || git reset --hard origin/main~1 || true && \
-                echo '🛑 Остановка контейнеров...' && \
-                docker compose down || true && \
-                echo '🔨 Пересборка образов...' && \
-                docker compose build --no-cache && \
-                echo '🚀 Запуск предыдущей версии...' && \
-                docker compose up -d && \
-                echo '✅ Rollback завершен'; \
-              else \
-                echo '⚠️ Предыдущая версия не найдена, rollback невозможен'; \
-              fi"
-          fi
+          echo "✅ Используется путь: /root/public"
+          ssh -p "$VPS_SSH_PORT" "$VPS_USER@$VPS_HOST" "cd /root/public && \
+            if [ -f .previous_version ]; then \
+              PREVIOUS_COMMIT=\$(cat .previous_version) && \
+              echo '📦 Откат к коммиту:' \$PREVIOUS_COMMIT && \
+              git fetch origin main && \
+              git reset --hard \$PREVIOUS_COMMIT || git reset --hard origin/main~1 || true && \
+              echo '🛑 Остановка контейнеров...' && \
+              docker compose down || true && \
+              echo '🔨 Пересборка образов...' && \
+              docker compose build --no-cache && \
+              echo '🚀 Запуск предыдущей версии...' && \
+              docker compose up -d && \
+              echo '✅ Rollback завершен'; \
+            else \
+              echo '⚠️ Предыдущая версия не найдена, rollback невозможен'; \
+            fi"
 
       # Шаг 14: Отправка уведомления об ошибке деплоя (Telegram, опционально)
       - name: Send deployment failure notification
