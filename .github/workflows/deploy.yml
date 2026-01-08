@@ -27,8 +27,18 @@ jobs:
           VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT }}
         run: |
           VPS_SSH_PORT=${VPS_SSH_PORT:-22}
+          
+          # Проверка обязательных переменных
+          if [ -z "$VPS_HOST" ]; then
+            echo "❌ Ошибка: VPS_HOST не установлен"
+            exit 1
+          fi
+          
+          # Удаляем возможные пробелы из переменных
+          VPS_HOST=$(echo "$VPS_HOST" | tr -d '[:space:]')
+          
           mkdir -p ~/.ssh
-          ssh-keyscan -p $VPS_SSH_PORT -H $VPS_HOST >> ~/.ssh/known_hosts
+          ssh-keyscan -p "$VPS_SSH_PORT" -H "$VPS_HOST" >> ~/.ssh/known_hosts
 
       # Шаг 4: Тестирование SSH подключения
       - name: Test SSH connection
@@ -38,8 +48,19 @@ jobs:
           VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT }}
         run: |
           VPS_SSH_PORT=${VPS_SSH_PORT:-22}
-          ssh -p $VPS_SSH_PORT \
-              $VPS_USER@$VPS_HOST \
+          
+          # Проверка обязательных переменных
+          if [ -z "$VPS_HOST" ] || [ -z "$VPS_USER" ]; then
+            echo "❌ Ошибка: VPS_HOST или VPS_USER не установлены"
+            exit 1
+          fi
+          
+          # Удаляем возможные пробелы из переменных
+          VPS_HOST=$(echo "$VPS_HOST" | tr -d '[:space:]')
+          VPS_USER=$(echo "$VPS_USER" | tr -d '[:space:]')
+          
+          ssh -p "$VPS_SSH_PORT" \
+              "$VPS_USER@$VPS_HOST" \
               "echo ✅ SSH connection successful"
 
       # Шаг 5: Сохранение текущего коммита для возможного rollback
@@ -52,9 +73,23 @@ jobs:
         run: |
           VPS_SSH_PORT=${VPS_SSH_PORT:-22}
           VPS_PROJECT_PATH=${VPS_PROJECT_PATH:-~/public}
+          
+          # Проверка обязательных переменных
+          if [ -z "$VPS_HOST" ] || [ -z "$VPS_USER" ]; then
+            echo "⚠️ VPS_HOST или VPS_USER не установлены, пропускаем сохранение версии"
+            exit 0
+          fi
+          
+          # Отладочный вывод (без показа значений для безопасности)
           echo "💾 Сохранение текущего коммита для rollback..."
-          ssh -p $VPS_SSH_PORT $VPS_USER@$VPS_HOST \
-            "cd $VPS_PROJECT_PATH && git rev-parse HEAD > .previous_version 2>/dev/null || echo 'Нет предыдущей версии'" || true
+          echo "📍 Подключение к: $VPS_USER@$VPS_HOST:$VPS_SSH_PORT"
+          
+          # Удаляем возможные пробелы и лишние символы из переменных
+          VPS_HOST=$(echo "$VPS_HOST" | tr -d '[:space:]')
+          VPS_USER=$(echo "$VPS_USER" | tr -d '[:space:]')
+          
+          ssh -p "$VPS_SSH_PORT" "$VPS_USER@$VPS_HOST" \
+            "cd $VPS_PROJECT_PATH && git rev-parse HEAD > .previous_version 2>/dev/null || echo 'Нет предыдущей версии'" || echo "⚠️ Не удалось сохранить версию (не критично)"
 
       # Шаг 6: Отправка уведомления о начале деплоя (Telegram, опционально)
       - name: Send deployment start notification
@@ -93,8 +128,12 @@ jobs:
             exit 1
           fi
           
+          # Удаляем возможные пробелы из переменных
+          VPS_HOST=$(echo "$VPS_HOST" | tr -d '[:space:]')
+          VPS_USER=$(echo "$VPS_USER" | tr -d '[:space:]')
+          
           # Выполнение деплоя через SSH (передача команды как аргумент)
-          ssh -p $VPS_SSH_PORT $VPS_USER@$VPS_HOST "cd $VPS_PROJECT_PATH && \
+          ssh -p "$VPS_SSH_PORT" "$VPS_USER@$VPS_HOST" "cd $VPS_PROJECT_PATH && \
             echo '📥 Обновление кода из репозитория...' && \
             git fetch origin main && \
             git reset --hard origin/main && \
@@ -187,8 +226,12 @@ jobs:
           VPS_PROJECT_PATH: ${{ secrets.VPS_PROJECT_PATH }}
         run: |
           VPS_SSH_PORT=${VPS_SSH_PORT:-22}
+          # Удаляем возможные пробелы из переменных
+          VPS_HOST=$(echo "$VPS_HOST" | tr -d '[:space:]')
+          VPS_USER=$(echo "$VPS_USER" | tr -d '[:space:]')
+          
           echo "🧹 Очистка неиспользуемых Docker ресурсов..."
-          ssh -p $VPS_SSH_PORT $VPS_USER@$VPS_HOST \
+          ssh -p "$VPS_SSH_PORT" "$VPS_USER@$VPS_HOST" \
             "docker system prune -af --volumes" || echo "⚠️ Ошибка при очистке Docker (не критично)"
 
       # Шаг 12: Отправка уведомления об успешном деплое (Telegram, опционально)
@@ -220,9 +263,20 @@ jobs:
         run: |
           VPS_SSH_PORT=${VPS_SSH_PORT:-22}
           VPS_PROJECT_PATH=${VPS_PROJECT_PATH:-~/public}
+          
+          # Проверка обязательных переменных
+          if [ -z "$VPS_HOST" ] || [ -z "$VPS_USER" ]; then
+            echo "⚠️ VPS_HOST или VPS_USER не установлены, rollback невозможен"
+            exit 0
+          fi
+          
+          # Удаляем возможные пробелы из переменных
+          VPS_HOST=$(echo "$VPS_HOST" | tr -d '[:space:]')
+          VPS_USER=$(echo "$VPS_USER" | tr -d '[:space:]')
+          
           echo "🔄 Начало rollback к предыдущей версии..."
           
-          ssh -p $VPS_SSH_PORT $VPS_USER@$VPS_HOST "cd $VPS_PROJECT_PATH && \
+          ssh -p "$VPS_SSH_PORT" "$VPS_USER@$VPS_HOST" "cd $VPS_PROJECT_PATH && \
             if [ -f .previous_version ]; then \
               PREVIOUS_COMMIT=\$(cat .previous_version) && \
               echo '📦 Откат к коммиту:' \$PREVIOUS_COMMIT && \
