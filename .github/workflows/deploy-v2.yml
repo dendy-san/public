@@ -61,6 +61,74 @@ jobs:
             fi
           EOF
 
+      - name: 🧨 ЯДЕРНАЯ ОЧИСТКА Docker (если нужно)
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT || 22 }}
+        run: |
+          echo "🧨 ЯДЕРНАЯ ОЧИСТКА Docker (только если образы заблокированы)..."
+          
+          # Проверяем, есть ли заблокированные образы
+          ssh -p $VPS_SSH_PORT -o StrictHostKeyChecking=no $VPS_USER@$VPS_HOST bash << 'NUCLEAR_CLEANUP'
+            set -e
+            
+            cd /root/public || exit 1
+            
+            echo "🔍 Проверка заблокированных образов..."
+            BLOCKED_IMAGES=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "public-(backend|frontend|admin-frontend):latest" | wc -l || echo "0")
+            
+            if [ "$BLOCKED_IMAGES" -gt 0 ] 2>/dev/null; then
+              echo "⚠️  Найдено $BLOCKED_IMAGES заблокированных образов"
+              echo "🧨 ВЫПОЛНЯЕМ ПОЛНЫЙ СБРОС DOCKER..."
+              
+              # 1. ОСТАНАВЛИВАЕМ ВСЁ
+              echo "  1. Остановка всех контейнеров..."
+              docker compose down 2>/dev/null || true
+              docker stop $(docker ps -aq) 2>/dev/null || true
+              
+              # 2. УДАЛЯЕМ ВСЕ КОНТЕЙНЕРЫ
+              echo "  2. Удаление всех контейнеров..."
+              docker rm -f $(docker ps -aq) 2>/dev/null || true
+              
+              # 3. УДАЛЯЕМ ВСЕ ОБРАЗЫ
+              echo "  3. Удаление всех образов..."
+              docker rmi -f $(docker images -q) 2>/dev/null || true
+              
+              # 4. ОЧИЩАЕМ ВСЕ VOLUMES (кроме важных данных)
+              echo "  4. Очистка volumes..."
+              docker volume prune -f || true
+              
+              # 5. ПОЛНЫЙ СБРОС DOCKER (ЯДЕРНОЕ РЕШЕНИЕ)
+              echo "  5. Полный сброс Docker (остановка службы)..."
+              systemctl stop docker || service docker stop || true
+              
+              echo "  6. Очистка директории Docker..."
+              # Удаляем только build cache и временные файлы, НЕ удаляем volumes
+              rm -rf /var/lib/docker/buildkit/* 2>/dev/null || true
+              rm -rf /var/lib/docker/tmp/* 2>/dev/null || true
+              rm -rf /var/lib/docker/overlay2/* 2>/dev/null || true
+              
+              echo "  7. Запуск Docker..."
+              systemctl start docker || service docker start || true
+              
+              echo "  8. Ожидание инициализации Docker..."
+              sleep 15
+              
+              # 9. ПРОВЕРЯЕМ
+              echo "  9. Проверка состояния Docker..."
+              docker info > /dev/null 2>&1 || {
+                echo "  ⚠️  Docker не запустился, ждем еще..."
+                sleep 10
+                docker info || echo "  ❌ Docker все еще не работает"
+              }
+              
+              echo "✅ Ядерная очистка завершена"
+            else
+              echo "✅ Заблокированных образов не найдено, пропускаем ядерную очистку"
+            fi
+          NUCLEAR_CLEANUP
+
       - name: Deploy to VPS
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
