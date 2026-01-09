@@ -4,7 +4,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.routers.llm import router as llm_router
 from app.routers.payment import router as payment_router
 from app.routers.session import router as session_router
-from app.routers.admin import router as admin_router
+# Импорт admin_router с обработкой ошибок для совместимости с разными версиями
+try:
+    from app.routers.admin import router as admin_router
+except ImportError:
+    # Если модуль не существует или не содержит router в предыдущих версиях
+    from fastapi import APIRouter
+    admin_router = APIRouter()  # Создаем пустой router для совместимости
 from app.services.task_queue import start_task_processor
 from app.models.database import init_db
 from app.services.params_service import params_service
