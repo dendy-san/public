@@ -448,22 +448,46 @@ jobs:
             
             echo "✅ Очистка контейнеров завершена"
             
-            # Шаг 5: Запуск всех сервисов вместе (Docker Compose сам разберется с зависимостями)
-            echo "🚀 Запуск всех сервисов..."
+            # Шаг 5: ГАРАНТИРОВАННАЯ ОЧИСТКА ВСЕХ КОНТЕЙНЕРОВ И СЕТЕЙ
+            echo "🧹 Финальная очистка перед запуском..."
             
-            # Дополнительная проверка что Redis контейнер удален
-            echo "  🔍 Финальная проверка Redis контейнера..."
-            if docker ps -a --format "{{.Names}}" | grep -q "^public-redis$"; then
-              echo "  ⚠️  Redis контейнер все еще существует, принудительное удаление..."
-              docker stop public-redis 2>/dev/null || true
-              docker rm -f public-redis 2>/dev/null || true
-              # Также удаляем по ID
-              REDIS_ID=$(docker ps -aq --filter "name=^public-redis$" 2>/dev/null || echo "")
-              if [ -n "$REDIS_ID" ]; then
-                echo "    Удаление Redis по ID: $REDIS_ID"
-                docker rm -f "$REDIS_ID" 2>/dev/null || true
+            # Удаляем ВСЕ контейнеры с "public" в имени (включая Redis)
+            echo "  Удаление всех контейнеров проекта..."
+            docker ps -a --format "{{.ID}} {{.Names}}" 2>/dev/null | grep -E "public" | awk '{print $1}' | while read -r id; do
+              if [ -n "$id" ]; then
+                echo "    Удаление контейнера: $id"
+                docker rm -f "$id" 2>/dev/null || true
               fi
-            fi
+            done || true
+            
+            # Удаляем контейнеры по конкретным именам (на случай если grep не сработал)
+            for name in public-redis public-backend public-frontend public-admin-frontend public-redis-commander; do
+              echo "  Проверка и удаление: $name"
+              docker ps -a --format "{{.Names}}" | grep -q "^${name}$" && docker rm -f "$name" 2>/dev/null || true
+              # Также удаляем по ID
+              CONTAINER_ID=$(docker ps -aq --filter "name=^${name}$" 2>/dev/null || echo "")
+              if [ -n "$CONTAINER_ID" ]; then
+                echo "    Удаление по ID: $CONTAINER_ID"
+                docker rm -f "$CONTAINER_ID" 2>/dev/null || true
+              fi
+            done
+            
+            # Удаляем ВСЕ сети с "public" в имени
+            echo "  Удаление всех сетей проекта..."
+            docker network ls --format "{{.ID}} {{.Name}}" 2>/dev/null | grep -E "public" | awk '{print $1}' | while read -r network_id; do
+              if [ -n "$network_id" ]; then
+                echo "    Удаление сети: $network_id"
+                docker network rm "$network_id" 2>/dev/null || true
+              fi
+            done || true
+            
+            # Удаляем конкретную сеть по имени
+            docker network rm public_public-network 2>/dev/null || true
+            
+            echo "✅ Очистка завершена"
+            
+            # Шаг 6: Запуск всех сервисов вместе (Docker Compose сам разберется с зависимостями)
+            echo "🚀 Запуск всех сервисов..."
             
             # Запускаем все сервисы вместе - Docker Compose сам разберется с зависимостями
             COMPOSE_PROJECT_NAME=public UNIQUE_TAG="\$UNIQUE_TAG" DEPLOY_ID="\$DEPLOY_ID" docker compose up -d --force-recreate --remove-orphans || {

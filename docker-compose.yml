@@ -7,7 +7,7 @@ services:
   # Redis для кэширования и фоновых задач
   redis:
     image: redis:7-alpine
-    container_name: public-redis
+    container_name: public-redis${DEPLOY_ID:+-${DEPLOY_ID}}
     command: redis-server --appendonly yes
     ports:
       - "6379:6379"
