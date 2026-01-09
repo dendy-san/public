@@ -106,15 +106,24 @@ jobs:
             
             # Дополнительная очистка - удаление контейнеров, которые могли остаться
             echo "🧹 Дополнительная очистка старых контейнеров..."
-            for container in $(docker ps -a --filter "name=public-" --format "{{.Names}}"); do
+            # Удаляем все контейнеры, содержащие "public" в имени
+            docker ps -a --format "{{.Names}}" | grep -E "public-|public_" | while read container; do
+              echo "  Удаление контейнера: $container"
               docker rm -f "$container" || true
+            done || true
+            
+            # Принудительное удаление контейнеров по имени (на случай если grep не сработал)
+            for name in public-redis public-backend public-frontend public-admin-frontend; do
+              docker rm -f "$name" 2>/dev/null || true
             done
             
             # Удаление старых сетей, если они есть
             echo "🧹 Очистка старых сетей..."
-            for network in $(docker network ls --filter "name=public" --format "{{.ID}}"); do
+            # Удаляем все сети, содержащие "public" в имени
+            docker network ls --format "{{.Name}}" | grep -E "public" | while read network; do
+              echo "  Удаление сети: $network"
               docker network rm "$network" || true
-            done
+            done || true
 
             # Шаг 3: Пересборка образов
             echo "🔨 Пересборка Docker образов..."
@@ -298,15 +307,33 @@ jobs:
             
             # Дополнительная очистка - удаление контейнеров, которые могли остаться
             echo "🧹 Дополнительная очистка старых контейнеров..."
-            for container in $(docker ps -a --filter "name=public-" --format "{{.Names}}"); do
-              docker rm -f "$container" || true
+            # Принудительное удаление контейнеров по конкретным именам
+            for name in public-redis public-backend public-frontend public-admin-frontend; do
+              echo "  Проверка контейнера: $name"
+              if docker ps -a --format "{{.Names}}" | grep -q "^${name}$"; then
+                echo "    Удаление контейнера: $name"
+                docker rm -f "$name" || true
+              fi
             done
+            
+            # Удаляем все остальные контейнеры с "public" в имени
+            echo "  Поиск других контейнеров с 'public'..."
+            docker ps -a --format "{{.Names}}" | grep "public" | while read -r container; do
+              if [ -n "$container" ]; then
+                echo "    Удаление контейнера: $container"
+                docker rm -f "$container" || true
+              fi
+            done || true
             
             # Удаление старых сетей
             echo "🧹 Очистка сетей..."
-            for network in $(docker network ls --filter "name=public" --format "{{.ID}}"); do
-              docker network rm "$network" || true
-            done
+            # Принудительное удаление сетей с "public" в имени
+            docker network ls --format "{{.Name}}" | grep "public" | while read -r network; do
+              if [ -n "$network" ] && [ "$network" != "bridge" ] && [ "$network" != "host" ] && [ "$network" != "none" ]; then
+                echo "  Удаление сети: $network"
+                docker network rm "$network" || true
+              fi
+            done || true
 
             # Пересобираем образы для предыдущей версии
             echo "🔨 Пересборка образов предыдущей версии..."
