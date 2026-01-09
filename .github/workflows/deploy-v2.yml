@@ -184,6 +184,10 @@ jobs:
               docker images --format "{{.ID}} {{.Repository}}" | grep " ${image}$" | awk '{print $1}' | xargs -r docker rmi -f 2>/dev/null || true
             done
             
+            # ПОЛНАЯ очистка системы Docker
+            echo "  Полная очистка Docker system (prune -a -f --volumes)..."
+            docker system prune -a -f --volumes 2>/dev/null || echo "  Предупреждение: не удалось выполнить полную очистку"
+            
             # Удаляем dangling images
             echo "  Очистка dangling images..."
             docker image prune -f || true
@@ -201,6 +205,8 @@ jobs:
               docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "public-" | xargs -r docker image rm -f 2>/dev/null || true
               # Пробуем удалить через ID
               docker images --format "{{.ID}} {{.Repository}}" | grep -E "public-" | awk '{print $1}' | xargs -r docker image rm -f 2>/dev/null || true
+              # Последняя попытка через docker images | grep
+              docker images | grep "public-" | awk '{print $3}' | xargs -r docker rmi -f 2>/dev/null || true
             fi
             
             # Показываем оставшиеся образы для диагностики
