@@ -447,22 +447,48 @@ jobs:
             fi
             
             # Запускаем все сервисы вместе - Docker Compose сам разберется с зависимостями
-            docker compose up -d --force-recreate --remove-orphans || {
+            COMPOSE_PROJECT_NAME=public UNIQUE_TAG="\$UNIQUE_TAG" DEPLOY_ID="\$DEPLOY_ID" docker compose up -d --force-recreate --remove-orphans || {
               echo "❌ Ошибка при запуске контейнеров"
               echo "📋 Список всех контейнеров:"
               docker ps -a
               echo "📋 Статус compose:"
               docker compose ps
-              echo "📋 Логи Redis (если контейнер существует):"
-              docker logs public-redis 2>&1 || echo "Контейнер public-redis не найден"
-              echo "📋 Попытка запуска Redis вручную для диагностики:"
-              docker run -d --name test-redis-diagnostic redis:7-alpine redis-server --appendonly yes || echo "Не удалось запустить тестовый Redis"
-              sleep 3
-              docker logs test-redis-diagnostic 2>&1 || echo "Не удалось получить логи тестового Redis"
-              docker stop test-redis-diagnostic 2>/dev/null || true
-              docker rm test-redis-diagnostic 2>/dev/null || true
-              echo "📋 Все логи:"
-              docker compose logs
+              
+              # Проверка .env файла
+              echo "📋 Проверка .env файла:"
+              if [ -f ".env" ]; then
+                echo "  ✅ .env файл существует"
+                echo "  Первые 5 строк (без секретов):"
+                head -5 .env | sed 's/=.*/=***/' || echo "  Не удалось прочитать .env"
+              else
+                echo "  ❌ .env файл НЕ НАЙДЕН!"
+              fi
+              
+              # Логи всех сервисов
+              echo "📋 Логи Redis:"
+              docker compose logs redis --tail=50 2>&1 || echo "Контейнер Redis не найден"
+              
+              echo "📋 Логи Backend:"
+              BACKEND_CONTAINER_NAME="public-backend\${DEPLOY_ID:+-${DEPLOY_ID}}"
+              docker compose logs backend --tail=100 2>&1 || {
+                echo "  Попытка найти backend контейнер..."
+                docker ps -a | grep backend || echo "  Backend контейнер не найден"
+                # Пробуем получить логи через docker logs
+                docker ps -a --format "{{.Names}}" | grep backend | head -1 | xargs -I {} docker logs {} --tail=100 2>&1 || echo "  Не удалось получить логи backend"
+              }
+              
+              echo "📋 Логи Frontend:"
+              docker compose logs frontend --tail=50 2>&1 || echo "Контейнер Frontend не найден"
+              
+              echo "📋 Логи Admin Frontend:"
+              docker compose logs admin-frontend --tail=50 2>&1 || echo "Контейнер Admin Frontend не найден"
+              
+              # Проверка статуса контейнеров
+              echo "📋 Детальный статус контейнеров:"
+              docker ps -a --format "table {{.Names}}\t{{.Status}}\t{{.ExitCode}}" | grep -E "NAMES|public" || docker ps -a
+              
+              echo "📋 Все логи compose:"
+              docker compose logs --tail=50
               exit 1
             }
             
