@@ -383,27 +383,30 @@ jobs:
             echo "  Проверка подстановки переменных в docker-compose.yml..."
             docker compose config 2>&1 | grep -E "public-(backend|frontend|admin-frontend)" | head -5 || echo "  Не удалось проверить конфигурацию"
             
-            # Повторяем сборку до 3 раз при ошибках сети
-            BUILD_ATTEMPTS=3
-            BUILD_SUCCESS=false
-            for attempt in \$(seq 1 \$BUILD_ATTEMPTS); do
-              echo "  Попытка сборки $attempt/\$BUILD_ATTEMPTS..."
-              # Docker Compose автоматически читает .env файл
-              if COMPOSE_PROJECT_NAME=public docker compose build --no-cache --pull --progress=plain --force-rm 2>&1 | tee /tmp/build.log; then
-                echo "  ✅ Сборка успешна на попытке $attempt"
-                BUILD_SUCCESS=true
-                break
-              else
-                echo "  ❌ Сборка не удалась на попытке $attempt"
-                if [ "\$attempt" -lt "\$BUILD_ATTEMPTS" ]; then
-                  echo "  ⏳ Ожидание 10 секунд перед повторной попыткой..."
-                  sleep 10
-                  # Очистка проблемных образов перед повторной попыткой
-                  docker images | grep "public-" | awk '{print \$3}' | xargs -r docker rmi -f 2>/dev/null || true
-                  docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "public-(backend|frontend|admin-frontend):latest" | xargs -r docker rmi -f 2>/dev/null || true
-                fi
-              fi
-            done
+            # СБОРКА ОБРАЗОВ С ЯВНЫМ УКАЗАНИЕМ ТЕГОВ
+            # Docker Compose может игнорировать переменные при сборке, поэтому используем прямой docker build
+            echo "🔨 Сборка образов с явным указанием тегов..."
+            
+            # Сборка каждого образа отдельно с явным тегом
+            echo "  📦 Сборка backend..."
+            docker build -t "public-backend:\$UNIQUE_TAG" -f Dockerfile . --no-cache --pull || {
+              echo "  ❌ Ошибка сборки backend"
+              exit 1
+            }
+            
+            echo "  📦 Сборка frontend..."
+            docker build -t "public-frontend:\$UNIQUE_TAG" -f frontend/Dockerfile ./frontend --no-cache --pull || {
+              echo "  ❌ Ошибка сборки frontend"
+              exit 1
+            }
+            
+            echo "  📦 Сборка admin-frontend..."
+            docker build -t "public-admin-frontend:\$UNIQUE_TAG" -f admin-frontend/Dockerfile ./admin-frontend --no-cache --pull || {
+              echo "  ❌ Ошибка сборки admin-frontend"
+              exit 1
+            }
+            
+            echo "✅ Все образы собраны с тегом: \$UNIQUE_TAG"
             
             if [ "\$BUILD_SUCCESS" != "true" ]; then
               echo "❌ Ошибка при пересборке образов после \$BUILD_ATTEMPTS попыток"
