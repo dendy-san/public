@@ -482,9 +482,33 @@ jobs:
             echo "  Сети:"
             docker network ls || echo "  Ошибка при проверке сетей"
 
+            # Удаление старых образов перед пересборкой
+            echo "🗑️  Удаление старых образов перед пересборкой..."
+            # Удаляем образы по именам
+            for image in public-backend public-frontend public-admin-frontend; do
+              if docker images --format "{{.Repository}}" | grep -q "^${image}$"; then
+                echo "  Удаление образа: $image"
+                docker rmi -f "${image}:latest" 2>/dev/null || true
+                docker rmi -f "$image" 2>/dev/null || true
+              fi
+            done
+            # Удаляем все образы с "public" в имени
+            docker images --format "{{.ID}} {{.Repository}}" | grep -E "public" | awk '{print $1}' | while read -r image_id; do
+              if [ -n "$image_id" ]; then
+                echo "  Удаление образа по ID: $image_id"
+                docker rmi -f "$image_id" 2>/dev/null || true
+              fi
+            done || true
+            # Удаляем dangling images
+            echo "  Очистка dangling images..."
+            docker image prune -f || true
+            # Очищаем build cache
+            echo "  Очистка build cache..."
+            docker builder prune -f || true
+            
             # Пересобираем образы для предыдущей версии
             echo "🔨 Пересборка образов предыдущей версии..."
-            docker compose build --no-cache || {
+            docker compose build --no-cache --pull --progress=plain || {
               echo "❌ Ошибка при пересборке образов"
               exit 1
             }
