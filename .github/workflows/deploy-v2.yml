@@ -558,8 +558,11 @@ jobs:
             # Шаг 6: Запуск всех сервисов вместе (Docker Compose сам разберется с зависимостями)
             echo "🚀 Запуск всех сервисов..."
             
-            # Запускаем все сервисы вместе - Docker Compose сам разберется с зависимостями
-            COMPOSE_PROJECT_NAME=public UNIQUE_TAG="\$UNIQUE_TAG" DEPLOY_ID="\$DEPLOY_ID" docker compose up -d --force-recreate --remove-orphans || {
+            # Запускаем все сервисы вместе (используем уже собранные образы, без пересборки)
+            # Убеждаемся что переменные в .env для правильных имен контейнеров
+            export UNIQUE_TAG="\$UNIQUE_TAG"
+            export DEPLOY_ID="\$DEPLOY_ID"
+            COMPOSE_PROJECT_NAME=public docker compose up -d --no-build --force-recreate --remove-orphans || {
               echo "❌ Ошибка при запуске контейнеров"
               echo "📋 Список всех контейнеров:"
               docker ps -a
@@ -1118,8 +1121,10 @@ jobs:
               fi
             fi
             
-            # Запускаем все сервисы вместе (передаем UNIQUE_TAG и DEPLOY_ID)
-            COMPOSE_PROJECT_NAME=public UNIQUE_TAG="\$UNIQUE_TAG" DEPLOY_ID="\$DEPLOY_ID" docker compose up -d --force-recreate --remove-orphans || {
+            # Запускаем все сервисы вместе (используем уже собранные образы, без пересборки)
+            export UNIQUE_TAG="\$UNIQUE_TAG"
+            export DEPLOY_ID="\$DEPLOY_ID"
+            COMPOSE_PROJECT_NAME=public docker compose up -d --no-build --force-recreate --remove-orphans || {
               echo "❌ Ошибка при запуске контейнеров"
               echo "📋 Список всех контейнеров:"
               docker ps -a
