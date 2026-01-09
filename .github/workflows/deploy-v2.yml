@@ -637,7 +637,15 @@ jobs:
             
             # Пересобираем образы для предыдущей версии
             echo "🔨 Пересборка образов предыдущей версии..."
-            docker compose build --no-cache --pull --progress=plain || {
+            # Финальная проверка образов перед сборкой
+            echo "  Финальная проверка образов перед сборкой..."
+            docker images | grep -E "public-|REPOSITORY" || echo "  Нет образов с 'public'"
+            # Если образы все еще есть, удаляем их принудительно
+            docker images | grep "public-" | awk '{print $3}' | xargs -r docker rmi -f 2>/dev/null || true
+            docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "public-" | xargs -r docker image rm -f 2>/dev/null || true
+            
+            # Сборка ПОСЛЕДОВАТЕЛЬНО (без параллелизма)
+            docker compose build --no-cache --pull --progress=plain --force-rm --no-parallel || {
               echo "❌ Ошибка при пересборке образов"
               exit 1
             }
