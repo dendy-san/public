@@ -76,7 +76,8 @@ jobs:
             cd /root/public || exit 1
             
             echo "🔍 Проверка заблокированных образов..."
-            BLOCKED_IMAGES=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "public-(backend|frontend|admin-frontend):latest" | wc -l || echo "0")
+            # Проверяем образы с :latest и с любыми тегами
+            BLOCKED_IMAGES=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "public-(backend|frontend|admin-frontend)" | wc -l || echo "0")
             
             if [ "$BLOCKED_IMAGES" -gt 0 ] 2>/dev/null; then
               echo "⚠️  Найдено $BLOCKED_IMAGES заблокированных образов"
@@ -91,8 +92,13 @@ jobs:
               echo "  2. Удаление всех контейнеров..."
               docker rm -f $(docker ps -aq) 2>/dev/null || true
               
-              # 3. УДАЛЯЕМ ВСЕ ОБРАЗЫ
+              # 3. УДАЛЯЕМ ВСЕ ОБРАЗЫ (особенно :latest)
               echo "  3. Удаление всех образов..."
+              # Сначала удаляем образы проекта с :latest
+              docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "public-(backend|frontend|admin-frontend):latest" | xargs -r docker rmi -f 2>/dev/null || true
+              # Затем все образы проекта
+              docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "public-(backend|frontend|admin-frontend)" | xargs -r docker rmi -f 2>/dev/null || true
+              # Затем все остальные образы
               docker rmi -f $(docker images -q) 2>/dev/null || true
               
               # 4. ОЧИЩАЕМ ВСЕ VOLUMES (кроме важных данных)
