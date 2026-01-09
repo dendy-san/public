@@ -205,8 +205,8 @@ jobs:
             
             # Финальная проверка и принудительное удаление
             echo "  Финальная проверка образов..."
-            REMAINING_IMAGES=$(docker images --format "{{.Repository}}" | grep -E "public-" | wc -l)
-            if [ "$REMAINING_IMAGES" -gt 0 ]; then
+            REMAINING_IMAGES=$(docker images --format "{{.Repository}}" | grep -E "public-" | wc -l || echo "0")
+            if [ -n "$REMAINING_IMAGES" ] && [ "$REMAINING_IMAGES" -gt 0 ] 2>/dev/null; then
               echo "  ⚠️  Все еще осталось $REMAINING_IMAGES образов, принудительное удаление..."
               # Пробуем удалить через docker image rm
               docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "public-" | xargs -r docker image rm -f 2>/dev/null || true
@@ -620,8 +620,8 @@ jobs:
             
             # Финальная проверка и принудительное удаление
             echo "  Финальная проверка образов..."
-            REMAINING_IMAGES=$(docker images --format "{{.Repository}}" | grep -E "public-" | wc -l)
-            if [ "$REMAINING_IMAGES" -gt 0 ]; then
+            REMAINING_IMAGES=$(docker images --format "{{.Repository}}" | grep -E "public-" | wc -l || echo "0")
+            if [ -n "$REMAINING_IMAGES" ] && [ "$REMAINING_IMAGES" -gt 0 ] 2>/dev/null; then
               echo "  ⚠️  Все еще осталось $REMAINING_IMAGES образов, принудительное удаление..."
               # Пробуем удалить через docker image rm
               docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "public-" | xargs -r docker image rm -f 2>/dev/null || true
