@@ -441,12 +441,26 @@ jobs:
             done
             
             # Удаляем все контейнеры с "public" в имени
-            docker ps -a --format "{{.ID}} {{.Names}}" 2>/dev/null | grep -E "public" | awk '{print $1}' | xargs -r docker rm -f 2>/dev/null || true
+            docker ps -a --format "{{.ID}} {{.Names}}" 2>/dev/null | grep -E "public" | awk '{print $1}' | while read -r id; do
+              if [ -n "$id" ]; then
+                echo "    Удаление контейнера: $id"
+                docker rm -f "$id" 2>/dev/null || true
+              fi
+            done || true
             
-            # Удаляем сеть если осталась
+            # Удаляем ВСЕ сети с "public" в имени
+            echo "  Удаление всех сетей проекта..."
+            docker network ls --format "{{.ID}} {{.Name}}" 2>/dev/null | grep -E "public" | awk '{print $1}' | while read -r network_id; do
+              if [ -n "$network_id" ]; then
+                echo "    Удаление сети: $network_id"
+                docker network rm "$network_id" 2>/dev/null || true
+              fi
+            done || true
+            
+            # Удаляем конкретную сеть по имени
             docker network rm public_public-network 2>/dev/null || true
             
-            echo "✅ Очистка контейнеров завершена"
+            echo "✅ Очистка контейнеров и сетей завершена"
             
             # Шаг 5: ГАРАНТИРОВАННАЯ ОЧИСТКА ВСЕХ КОНТЕЙНЕРОВ И СЕТЕЙ
             echo "🧹 Финальная очистка перед запуском..."
@@ -990,12 +1004,26 @@ jobs:
             done
             
             # Удаляем все контейнеры с "public" в имени
-            docker ps -a --format "{{.ID}} {{.Names}}" 2>/dev/null | grep -E "public" | awk '{print $1}' | xargs -r docker rm -f 2>/dev/null || true
+            docker ps -a --format "{{.ID}} {{.Names}}" 2>/dev/null | grep -E "public" | awk '{print $1}' | while read -r id; do
+              if [ -n "$id" ]; then
+                echo "    Удаление контейнера: $id"
+                docker rm -f "$id" 2>/dev/null || true
+              fi
+            done || true
             
-            # Удаляем сеть если осталась
+            # Удаляем ВСЕ сети с "public" в имени
+            echo "  Удаление всех сетей проекта..."
+            docker network ls --format "{{.ID}} {{.Name}}" 2>/dev/null | grep -E "public" | awk '{print $1}' | while read -r network_id; do
+              if [ -n "$network_id" ]; then
+                echo "    Удаление сети: $network_id"
+                docker network rm "$network_id" 2>/dev/null || true
+              fi
+            done || true
+            
+            # Удаляем конкретную сеть по имени
             docker network rm public_public-network 2>/dev/null || true
             
-            echo "✅ Очистка контейнеров завершена"
+            echo "✅ Очистка контейнеров и сетей завершена"
             
             # Запускаем контейнеры
             # Запуск всех сервисов вместе (Docker Compose сам разберется с зависимостями)
