@@ -134,11 +134,49 @@ jobs:
             }
             echo "✅ Образы пересобраны"
 
+            # Финальная проверка и очистка перед запуском
+            echo "🔍 Финальная проверка контейнеров перед запуском..."
+            # Принудительное удаление всех контейнеров по именам
+            for name in public-redis public-backend public-frontend public-admin-frontend public-redis-commander; do
+              if docker ps -a --format "{{.Names}}" | grep -q "^${name}$"; then
+                echo "  ⚠️  Контейнер $name все еще существует, принудительное удаление..."
+                docker rm -f "$name" || true
+                # Дополнительная попытка удаления по ID, если имя не сработало
+                CONTAINER_ID=$(docker ps -a --filter "name=^${name}$" --format "{{.ID}}")
+                if [ -n "$CONTAINER_ID" ]; then
+                  echo "    Удаление по ID: $CONTAINER_ID"
+                  docker rm -f "$CONTAINER_ID" || true
+                fi
+              fi
+            done
+            
+            # Удаляем все контейнеры с "public" в имени еще раз для надежности
+            echo "  Финальная очистка всех контейнеров с 'public'..."
+            docker ps -a --format "{{.ID}} {{.Names}}" | grep "public" | awk '{print $1}' | while read -r id; do
+              if [ -n "$id" ]; then
+                echo "    Удаление контейнера по ID: $id"
+                docker rm -f "$id" || true
+              fi
+            done || true
+            
+            # Финальная очистка сетей
+            echo "  Финальная очистка сетей..."
+            docker network ls --format "{{.ID}} {{.Name}}" | grep "public" | awk '{print $1}' | while read -r network_id; do
+              if [ -n "$network_id" ]; then
+                echo "    Удаление сети по ID: $network_id"
+                docker network rm "$network_id" || true
+              fi
+            done || true
+
             # Шаг 4: Запуск контейнеров
             echo "🚀 Запуск контейнеров..."
             docker compose up -d --remove-orphans || {
               echo "❌ Ошибка при запуске контейнеров"
+              echo "📋 Список всех контейнеров:"
+              docker ps -a
+              echo "📋 Статус compose:"
               docker compose ps
+              echo "📋 Логи:"
               docker compose logs
               exit 1
             }
@@ -327,11 +365,11 @@ jobs:
             
             # Удаление старых сетей
             echo "🧹 Очистка сетей..."
-            # Принудительное удаление сетей с "public" в имени
-            docker network ls --format "{{.Name}}" | grep "public" | while read -r network; do
-              if [ -n "$network" ] && [ "$network" != "bridge" ] && [ "$network" != "host" ] && [ "$network" != "none" ]; then
-                echo "  Удаление сети: $network"
-                docker network rm "$network" || true
+            # Принудительное удаление сетей с "public" в имени по ID
+            docker network ls --format "{{.ID}} {{.Name}}" | grep "public" | awk '{print $1}' | while read -r network_id; do
+              if [ -n "$network_id" ]; then
+                echo "  Удаление сети по ID: $network_id"
+                docker network rm "$network_id" || true
               fi
             done || true
 
