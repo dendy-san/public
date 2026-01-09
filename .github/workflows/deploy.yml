@@ -145,11 +145,15 @@ jobs:
             git fetch origin main && \
             git reset --hard origin/main && \
             echo '🛑 Остановка текущих контейнеров...' && \
-            docker compose down || true && \
+            docker compose down --remove-orphans || true && \
+            echo '🧹 Очистка старых контейнеров...' && \
+            for container in \$(docker ps -a --filter \"name=public-\" --format \"{{.Names}}\"); do docker rm -f \"\$container\" || true; done && \
+            echo '🧹 Очистка старых сетей...' && \
+            for network in \$(docker network ls --filter \"name=public\" --format \"{{.ID}}\"); do docker network rm \"\$network\" || true; done && \
             echo '🔨 Пересборка Docker образов...' && \
             docker compose build --no-cache && \
             echo '🚀 Запуск контейнеров...' && \
-            docker compose up -d && \
+            docker compose up -d --remove-orphans && \
             echo '⏳ Ожидание запуска сервисов (60 секунд)...' && \
             sleep 60 && \
             echo '✅ Деплой завершен, проверка здоровья сервисов...'"
@@ -289,12 +293,16 @@ jobs:
               echo '📦 Откат к коммиту:' \$PREVIOUS_COMMIT && \
               git fetch origin main && \
               git reset --hard \$PREVIOUS_COMMIT || git reset --hard origin/main~1 || true && \
-              echo '🛑 Остановка контейнеров...' && \
-              docker compose down || true && \
-              echo '🔨 Пересборка образов...' && \
-              docker compose build --no-cache && \
-              echo '🚀 Запуск предыдущей версии...' && \
-              docker compose up -d && \
+                echo '🛑 Остановка контейнеров...' && \
+                docker compose down --remove-orphans || true && \
+                echo '🧹 Очистка старых контейнеров...' && \
+                for container in \$(docker ps -a --filter \"name=public-\" --format \"{{.Names}}\"); do docker rm -f \"\$container\" || true; done && \
+                echo '🧹 Очистка старых сетей...' && \
+                for network in \$(docker network ls --filter \"name=public\" --format \"{{.ID}}\"); do docker network rm \"\$network\" || true; done && \
+                echo '🔨 Пересборка образов...' && \
+                docker compose build --no-cache && \
+                echo '🚀 Запуск предыдущей версии...' && \
+                docker compose up -d --remove-orphans && \
               echo '✅ Rollback завершен'; \
             else \
               echo '⚠️ Предыдущая версия не найдена, rollback невозможен'; \
