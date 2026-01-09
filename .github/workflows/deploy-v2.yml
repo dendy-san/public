@@ -134,13 +134,19 @@ jobs:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT || 22 }}
+          UNIQUE_TAG: github-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           echo "🚀 Начало деплоя на VPS..."
           echo "✅ Используется путь: /root/public"
+          echo "🏷️  Уникальный тег: $UNIQUE_TAG"
 
           # Выполнение команд деплоя через SSH с передачей переменных
           ssh -p $VPS_SSH_PORT -o StrictHostKeyChecking=no $VPS_USER@$VPS_HOST bash << EOF
             set -e  # Остановка при ошибках
+            
+            # Экспортируем уникальный тег
+            export UNIQUE_TAG="$UNIQUE_TAG"
+            echo "🏷️  Используется тег: \$UNIQUE_TAG"
 
             # Переход в директорию проекта
             cd /root/public || {

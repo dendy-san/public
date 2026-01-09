@@ -26,6 +26,7 @@ services:
   # Режим переключается через переменную ENVIRONMENT в .env (dev/prod)
   # start.sh автоматически выберет uvicorn (dev) или gunicorn (prod) на основе ENVIRONMENT
   backend:
+    image: public-backend:${UNIQUE_TAG:-latest}
     build:
       context: .
       dockerfile: Dockerfile
@@ -67,6 +68,7 @@ services:
 
   # Frontend сервис (React + Vite + Nginx)
   frontend:
+    image: public-frontend:${UNIQUE_TAG:-latest}
     build:
       context: ./frontend
       dockerfile: Dockerfile
@@ -88,6 +90,7 @@ services:
 
   # Админ-панель (React + Vite + Nginx)
   admin-frontend:
+    image: public-admin-frontend:${UNIQUE_TAG:-latest}
     build:
       context: ./admin-frontend
       dockerfile: Dockerfile
