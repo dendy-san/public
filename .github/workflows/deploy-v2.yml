@@ -308,12 +308,61 @@ jobs:
             }
             
             # Проверка статуса контейнеров после запуска
-            echo "⏳ Ожидание запуска контейнеров (5 секунд)..."
-            sleep 5
-            echo "📋 Статус контейнеров после запуска:"
+            echo "⏳ Ожидание запуска контейнеров (15 секунд)..."
+            sleep 15
+            
+            echo "=== ПРОВЕРКА СТАТУСА ВСЕХ КОНТЕЙНЕРОВ ==="
+            docker compose ps
+            
+            # Проверяем каждый сервис отдельно
+            echo ""
+            echo "=== ДЕТАЛЬНАЯ ПРОВЕРКА СЕРВИСОВ ==="
+            for service in redis backend frontend admin-frontend redis-commander; do
+              echo ""
+              echo "--- Проверка $service ---"
+              if docker compose ps $service 2>/dev/null | grep -q "Up"; then
+                echo "✅ $service запущен"
+                echo "Последние 10 строк лога:"
+                docker compose logs --tail=10 $service 2>/dev/null || echo "Не удалось получить логи"
+              else
+                echo "❌ $service НЕ запущен или не найден"
+                echo "Полный лог:"
+                docker compose logs $service 2>/dev/null || echo "Не удалось получить логи"
+                # Пробуем получить логи через docker logs
+                CONTAINER_NAME="public-$service"
+                if docker ps -a --format "{{.Names}}" | grep -q "^${CONTAINER_NAME}$"; then
+                  echo "Логи через docker logs:"
+                  docker logs "$CONTAINER_NAME" 2>&1 | tail -20 || echo "Не удалось получить логи"
+                fi
+              fi
+            done
+            
+            # Проверка доступности сервисов
+            echo ""
+            echo "=== ПРОВЕРКА ДОСТУПНОСТИ СЕРВИСОВ ==="
+            
+            # Redis
+            echo "Проверка Redis..."
+            if docker compose exec -T redis redis-cli ping 2>/dev/null | grep -q "PONG"; then
+              echo "✅ Redis отвечает на ping"
+            else
+              echo "❌ Redis не отвечает на ping"
+              docker compose logs redis --tail=20
+            fi
+            
+            # Backend
+            echo "Проверка Backend..."
+            if docker compose exec -T backend curl -f http://localhost:8000/health 2>/dev/null > /dev/null; then
+              echo "✅ Backend health check прошел"
+            else
+              echo "⚠️  Backend health check не прошел (может быть еще запускается)"
+              docker compose logs backend --tail=20
+            fi
+            
+            # Показываем общий статус
+            echo ""
+            echo "=== ОБЩИЙ СТАТУС ==="
             docker ps -a --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep -E "NAMES|public" || docker ps -a
-            echo "📋 Логи Redis после запуска:"
-            docker logs public-redis 2>&1 || echo "Контейнер public-redis не найден или не запущен"
             echo "✅ Контейнеры запущены"
 
             # Шаг 5: Ожидание запуска сервисов
