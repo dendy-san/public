@@ -31,7 +31,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: public-backend
+    container_name: public-backend${DEPLOY_ID:+-${DEPLOY_ID}}
     ports:
       - "8000:8000"
     environment:
@@ -73,7 +73,7 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    container_name: public-frontend
+    container_name: public-frontend${DEPLOY_ID:+-${DEPLOY_ID}}
     ports:
       - "3000:80"
     depends_on:
@@ -95,7 +95,7 @@ services:
     build:
       context: ./admin-frontend
       dockerfile: Dockerfile
-    container_name: public-admin-frontend
+    container_name: public-admin-frontend${DEPLOY_ID:+-${DEPLOY_ID}}
     ports:
       - "3001:80"
     depends_on:

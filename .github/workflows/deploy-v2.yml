@@ -141,18 +141,22 @@ jobs:
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT || 22 }}
           UNIQUE_TAG: github-${{ github.run_id }}-${{ github.run_attempt }}
+          DEPLOY_ID: deploy-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           echo "🚀 Начало деплоя на VPS..."
           echo "✅ Используется путь: /root/public"
           echo "🏷️  Уникальный тег: $UNIQUE_TAG"
+          echo "🆔 Уникальный ID деплоя: $DEPLOY_ID"
 
           # Выполнение команд деплоя через SSH с передачей переменных
           ssh -p $VPS_SSH_PORT -o StrictHostKeyChecking=no $VPS_USER@$VPS_HOST bash << EOF
             set -e  # Остановка при ошибках
             
-            # Экспортируем уникальный тег
+            # Экспортируем уникальный тег и ID деплоя
             export UNIQUE_TAG="$UNIQUE_TAG"
+            export DEPLOY_ID="$DEPLOY_ID"
             echo "🏷️  Используется тег: \$UNIQUE_TAG"
+            echo "🆔 Используется ID деплоя: \$DEPLOY_ID"
 
             # Переход в директорию проекта
             cd /root/public || {
@@ -339,9 +343,9 @@ jobs:
             echo "  Проверка удаления образов :latest..."
             docker images | grep -E "public-(backend|frontend|admin-frontend).*latest" || echo "  ✅ Образы :latest удалены"
             
-            # Сборка с принудительным удалением старых образов (передаем UNIQUE_TAG явно)
-            echo "🔨 Сборка образов с тегом: \$UNIQUE_TAG"
-            COMPOSE_PROJECT_NAME=public UNIQUE_TAG="\$UNIQUE_TAG" docker compose build --no-cache --pull --progress=plain --force-rm || {
+            # Сборка с принудительным удалением старых образов (передаем UNIQUE_TAG и DEPLOY_ID явно)
+            echo "🔨 Сборка образов с тегом: \$UNIQUE_TAG и ID: \$DEPLOY_ID"
+            COMPOSE_PROJECT_NAME=public UNIQUE_TAG="\$UNIQUE_TAG" DEPLOY_ID="\$DEPLOY_ID" docker compose build --no-cache --pull --progress=plain --force-rm || {
               echo "❌ Ошибка при пересборке образов"
               echo "📋 Попытка удаления проблемных образов и повторной сборки..."
               # Если сборка не удалась из-за существующих образов, удаляем их и пробуем еще раз
@@ -351,8 +355,8 @@ jobs:
               echo "  🔥 Дополнительная очистка образов :latest перед повторной сборкой..."
               docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "public-(backend|frontend|admin-frontend):latest" | xargs -r docker rmi -f 2>/dev/null || true
               
-              # Повторная попытка сборки (передаем UNIQUE_TAG явно)
-              COMPOSE_PROJECT_NAME=public UNIQUE_TAG="\$UNIQUE_TAG" docker compose build --no-cache --pull --progress=plain --force-rm || {
+              # Повторная попытка сборки (передаем UNIQUE_TAG и DEPLOY_ID явно)
+              COMPOSE_PROJECT_NAME=public UNIQUE_TAG="\$UNIQUE_TAG" DEPLOY_ID="\$DEPLOY_ID" docker compose build --no-cache --pull --progress=plain --force-rm || {
                 echo "❌ Ошибка при повторной пересборке образов"
                 docker compose logs
                 exit 1
@@ -837,9 +841,12 @@ jobs:
             docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "public-(backend|frontend|admin-frontend):latest" | xargs -r docker rmi -f 2>/dev/null || true
             docker images --format "{{.ID}} {{.Repository}}:{{.Tag}}" | grep -E "public-(backend|frontend|admin-frontend).*latest" | awk '{print $1}' | xargs -r docker rmi -f 2>/dev/null || true
             
-            # Сборка с уникальным тегом (передаем UNIQUE_TAG явно)
-            echo "🔨 Сборка образов с тегом: \$UNIQUE_TAG"
-            COMPOSE_PROJECT_NAME=public UNIQUE_TAG="\$UNIQUE_TAG" docker compose build --no-cache --pull --progress=plain --force-rm || {
+            # Генерируем уникальный ID для rollback
+            export DEPLOY_ID="rollback-\$(date +%Y%m%d-%H%M%S)"
+            
+            # Сборка с уникальным тегом (передаем UNIQUE_TAG и DEPLOY_ID явно)
+            echo "🔨 Сборка образов с тегом: \$UNIQUE_TAG и ID: \$DEPLOY_ID"
+            COMPOSE_PROJECT_NAME=public UNIQUE_TAG="\$UNIQUE_TAG" DEPLOY_ID="\$DEPLOY_ID" docker compose build --no-cache --pull --progress=plain --force-rm || {
               echo "❌ Ошибка при пересборке образов"
               exit 1
             }
@@ -939,8 +946,8 @@ jobs:
               fi
             fi
             
-            # Запускаем все сервисы вместе
-            docker compose up -d --force-recreate --remove-orphans || {
+            # Запускаем все сервисы вместе (передаем UNIQUE_TAG и DEPLOY_ID)
+            COMPOSE_PROJECT_NAME=public UNIQUE_TAG="\$UNIQUE_TAG" DEPLOY_ID="\$DEPLOY_ID" docker compose up -d --force-recreate --remove-orphans || {
               echo "❌ Ошибка при запуске контейнеров"
               echo "📋 Список всех контейнеров:"
               docker ps -a
