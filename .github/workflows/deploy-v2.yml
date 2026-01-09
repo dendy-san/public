@@ -324,15 +324,29 @@ jobs:
             fi
             echo "  ✅ Образы удалены перед сборкой"
             
-            # Сборка с принудительным удалением старых образов
-            docker compose build --no-cache --pull --progress=plain --force-rm || {
+            # КРИТИЧЕСКАЯ ОЧИСТКА: Удаляем все образы с тегом latest
+            echo "  🔥 Удаление всех образов с тегом :latest..."
+            docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "public-(backend|frontend|admin-frontend):latest" | xargs -r docker rmi -f 2>/dev/null || true
+            docker images --format "{{.ID}} {{.Repository}}:{{.Tag}}" | grep -E "public-(backend|frontend|admin-frontend).*latest" | awk '{print $1}' | xargs -r docker rmi -f 2>/dev/null || true
+            
+            # Проверяем что образы удалены
+            echo "  Проверка удаления образов :latest..."
+            docker images | grep -E "public-(backend|frontend|admin-frontend).*latest" || echo "  ✅ Образы :latest удалены"
+            
+            # Сборка с принудительным удалением старых образов (передаем UNIQUE_TAG явно)
+            echo "🔨 Сборка образов с тегом: \$UNIQUE_TAG"
+            COMPOSE_PROJECT_NAME=public UNIQUE_TAG="\$UNIQUE_TAG" docker compose build --no-cache --pull --progress=plain --force-rm || {
               echo "❌ Ошибка при пересборке образов"
               echo "📋 Попытка удаления проблемных образов и повторной сборки..."
               # Если сборка не удалась из-за существующих образов, удаляем их и пробуем еще раз
               docker images | grep "public-" | awk '{print $3}' | xargs -r docker rmi -f 2>/dev/null || true
               docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "public-" | xargs -r docker image rm -f 2>/dev/null || true
-              # Повторная попытка сборки
-              docker compose build --no-cache --pull --progress=plain --force-rm || {
+              # Дополнительная очистка перед повторной сборкой
+              echo "  🔥 Дополнительная очистка образов :latest перед повторной сборкой..."
+              docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "public-(backend|frontend|admin-frontend):latest" | xargs -r docker rmi -f 2>/dev/null || true
+              
+              # Повторная попытка сборки (передаем UNIQUE_TAG явно)
+              COMPOSE_PROJECT_NAME=public UNIQUE_TAG="\$UNIQUE_TAG" docker compose build --no-cache --pull --progress=plain --force-rm || {
                 echo "❌ Ошибка при повторной пересборке образов"
                 docker compose logs
                 exit 1
@@ -812,8 +826,14 @@ jobs:
             docker images | grep "public-" | awk '{print $3}' | xargs -r docker rmi -f 2>/dev/null || true
             docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "public-" | xargs -r docker image rm -f 2>/dev/null || true
             
-            # Сборка с уникальным тегом
-            docker compose build --no-cache --pull --progress=plain --force-rm || {
+            # КРИТИЧЕСКАЯ ОЧИСТКА: Удаляем все образы с тегом latest
+            echo "  🔥 Удаление всех образов с тегом :latest..."
+            docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "public-(backend|frontend|admin-frontend):latest" | xargs -r docker rmi -f 2>/dev/null || true
+            docker images --format "{{.ID}} {{.Repository}}:{{.Tag}}" | grep -E "public-(backend|frontend|admin-frontend).*latest" | awk '{print $1}' | xargs -r docker rmi -f 2>/dev/null || true
+            
+            # Сборка с уникальным тегом (передаем UNIQUE_TAG явно)
+            echo "🔨 Сборка образов с тегом: \$UNIQUE_TAG"
+            COMPOSE_PROJECT_NAME=public UNIQUE_TAG="\$UNIQUE_TAG" docker compose build --no-cache --pull --progress=plain --force-rm || {
               echo "❌ Ошибка при пересборке образов"
               exit 1
             }
