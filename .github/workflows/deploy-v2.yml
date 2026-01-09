@@ -379,9 +379,35 @@ jobs:
             echo "=== Содержимое docker-compose.yml (секция redis) ==="
             grep -A 15 "^  redis:" docker-compose.yml || echo "Секция redis не найдена"
             
-            # Шаг 4: Запуск контейнеров
+            # Шаг 4: ГАРАНТИРОВАННАЯ ОЧИСТКА КОНТЕЙНЕРОВ ПЕРЕД ЗАПУСКОМ
+            echo "🧹 Принудительное удаление ВСЕХ старых контейнеров перед запуском..."
+            
+            # Удаляем через docker compose
+            docker compose down --remove-orphans 2>/dev/null || true
+            
+            # Удаляем каждый контейнер по отдельности
+            for container_name in public-frontend public-backend public-admin-frontend public-redis public-redis-commander; do
+              echo "  Удаляем контейнер: $container_name"
+              docker rm -f "$container_name" 2>/dev/null || true
+              # Также удаляем по ID если имя не сработало
+              CONTAINER_ID=$(docker ps -aq --filter "name=^${container_name}$" 2>/dev/null || echo "")
+              if [ -n "$CONTAINER_ID" ]; then
+                echo "    Удаление по ID: $CONTAINER_ID"
+                docker rm -f "$CONTAINER_ID" 2>/dev/null || true
+              fi
+            done
+            
+            # Удаляем все контейнеры с "public" в имени
+            docker ps -a --format "{{.ID}} {{.Names}}" 2>/dev/null | grep -E "public" | awk '{print $1}' | xargs -r docker rm -f 2>/dev/null || true
+            
+            # Удаляем сеть если осталась
+            docker network rm public_public-network 2>/dev/null || true
+            
+            echo "✅ Очистка контейнеров завершена"
+            
+            # Шаг 5: Запуск контейнеров
             echo "🚀 Запуск контейнеров..."
-            docker compose up -d --remove-orphans || {
+            docker compose up -d --force-recreate --remove-orphans || {
               echo "❌ Ошибка при запуске контейнеров"
               echo "📋 Список всех контейнеров:"
               docker ps -a
@@ -798,9 +824,35 @@ jobs:
             echo "=== Содержимое docker-compose.yml (секция redis) ==="
             grep -A 15 "^  redis:" docker-compose.yml || echo "Секция redis не найдена"
             
+            # ГАРАНТИРОВАННАЯ ОЧИСТКА КОНТЕЙНЕРОВ ПЕРЕД ЗАПУСКОМ
+            echo "🧹 Принудительное удаление ВСЕХ старых контейнеров перед запуском rollback..."
+            
+            # Удаляем через docker compose
+            docker compose down --remove-orphans 2>/dev/null || true
+            
+            # Удаляем каждый контейнер по отдельности
+            for container_name in public-frontend public-backend public-admin-frontend public-redis public-redis-commander; do
+              echo "  Удаляем контейнер: $container_name"
+              docker rm -f "$container_name" 2>/dev/null || true
+              # Также удаляем по ID если имя не сработало
+              CONTAINER_ID=$(docker ps -aq --filter "name=^${container_name}$" 2>/dev/null || echo "")
+              if [ -n "$CONTAINER_ID" ]; then
+                echo "    Удаление по ID: $CONTAINER_ID"
+                docker rm -f "$CONTAINER_ID" 2>/dev/null || true
+              fi
+            done
+            
+            # Удаляем все контейнеры с "public" в имени
+            docker ps -a --format "{{.ID}} {{.Names}}" 2>/dev/null | grep -E "public" | awk '{print $1}' | xargs -r docker rm -f 2>/dev/null || true
+            
+            # Удаляем сеть если осталась
+            docker network rm public_public-network 2>/dev/null || true
+            
+            echo "✅ Очистка контейнеров завершена"
+            
             # Запускаем контейнеры
             echo "🚀 Запуск контейнеров предыдущей версии..."
-            docker compose up -d --remove-orphans || {
+            docker compose up -d --force-recreate --remove-orphans || {
               echo "❌ Ошибка при запуске контейнеров"
               echo "📋 Список всех контейнеров:"
               docker ps -a
