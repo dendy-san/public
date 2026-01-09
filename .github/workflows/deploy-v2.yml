@@ -348,23 +348,48 @@ jobs:
             docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "public-(backend|frontend|admin-frontend):latest" | xargs -r docker rmi -f 2>/dev/null || true
             docker images --format "{{.ID}} {{.Repository}}:{{.Tag}}" | grep -E "public-(backend|frontend|admin-frontend).*latest" | awk '{print $1}' | xargs -r docker rmi -f 2>/dev/null || true
             
-            # Создаем временный .env файл для передачи переменных в docker-compose
-            echo "  📝 Создание временного .env.deploy файла..."
-            echo "UNIQUE_TAG=\$UNIQUE_TAG" > .env.deploy
-            echo "DEPLOY_ID=\$DEPLOY_ID" >> .env.deploy
-            echo "  Содержимое .env.deploy:"
-            cat .env.deploy
+            # Добавляем переменные в существующий .env файл (Docker Compose автоматически читает .env)
+            echo "  📝 Добавление переменных в .env файл..."
+            # Сохраняем оригинальный .env если существует
+            if [ -f .env ]; then
+              cp .env .env.backup
+              # Добавляем или обновляем переменные
+              if grep -q "^UNIQUE_TAG=" .env; then
+                sed -i "s/^UNIQUE_TAG=.*/UNIQUE_TAG=\$UNIQUE_TAG/" .env
+              else
+                echo "UNIQUE_TAG=\$UNIQUE_TAG" >> .env
+              fi
+              if grep -q "^DEPLOY_ID=" .env; then
+                sed -i "s/^DEPLOY_ID=.*/DEPLOY_ID=\$DEPLOY_ID/" .env
+              else
+                echo "DEPLOY_ID=\$DEPLOY_ID" >> .env
+              fi
+            else
+              # Создаем новый .env файл
+              echo "UNIQUE_TAG=\$UNIQUE_TAG" > .env
+              echo "DEPLOY_ID=\$DEPLOY_ID" >> .env
+            fi
+            echo "  Переменные в .env (UNIQUE_TAG и DEPLOY_ID):"
+            grep -E "^(UNIQUE_TAG|DEPLOY_ID)=" .env || echo "  Переменные не найдены"
             
             # Сборка с повторными попытками при ошибках сети
             echo "🔨 Сборка образов с тегом: \$UNIQUE_TAG и ID: \$DEPLOY_ID"
+            
+            # Экспортируем переменные в окружение (на всякий случай)
+            export UNIQUE_TAG="\$UNIQUE_TAG"
+            export DEPLOY_ID="\$DEPLOY_ID"
+            
+            # Проверяем что переменные будут использоваться
+            echo "  Проверка подстановки переменных в docker-compose.yml..."
+            docker compose config 2>&1 | grep -E "public-(backend|frontend|admin-frontend)" | head -5 || echo "  Не удалось проверить конфигурацию"
             
             # Повторяем сборку до 3 раз при ошибках сети
             BUILD_ATTEMPTS=3
             BUILD_SUCCESS=false
             for attempt in \$(seq 1 \$BUILD_ATTEMPTS); do
               echo "  Попытка сборки $attempt/\$BUILD_ATTEMPTS..."
-              # Используем env_file для передачи переменных в docker-compose
-              if env \$(cat .env.deploy | xargs) COMPOSE_PROJECT_NAME=public docker compose --env-file .env.deploy build --no-cache --pull --progress=plain --force-rm 2>&1 | tee /tmp/build.log; then
+              # Docker Compose автоматически читает .env файл
+              if COMPOSE_PROJECT_NAME=public docker compose build --no-cache --pull --progress=plain --force-rm 2>&1 | tee /tmp/build.log; then
                 echo "  ✅ Сборка успешна на попытке $attempt"
                 BUILD_SUCCESS=true
                 break
