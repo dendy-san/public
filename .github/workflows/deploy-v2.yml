@@ -230,8 +230,27 @@ jobs:
             # Дополнительная очистка через docker image rm
             docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "public-" | xargs -r docker image rm -f 2>/dev/null || true
             
+            # КРИТИЧЕСКАЯ ОЧИСТКА: Удаляем образы по конкретным именам прямо перед сборкой
+            echo "  🔥 Финальное удаление образов по именам перед сборкой..."
+            for img_name in public-backend:latest public-frontend:latest public-admin-frontend:latest; do
+              echo "    Удаление образа: $img_name"
+              docker image rm -f "$img_name" 2>/dev/null || true
+              # Также пробуем удалить без тега
+              docker image rm -f "${img_name%:*}" 2>/dev/null || true
+              # Удаляем все варианты через ID
+              docker images --format "{{.ID}} {{.Repository}}:{{.Tag}}" | grep "$img_name" | awk '{print $1}' | xargs -r docker image rm -f 2>/dev/null || true
+            done
+            
+            # Проверка что образы удалены
+            echo "  Проверка удаления образов..."
+            REMAINING=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "public-(backend|frontend|admin-frontend):latest" | wc -l || echo "0")
+            if [ "$REMAINING" -gt 0 ] 2>/dev/null; then
+              echo "  ⚠️  Все еще осталось $REMAINING образов, принудительное удаление..."
+              docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "public-(backend|frontend|admin-frontend):latest" | xargs -r docker image rm -f 2>/dev/null || true
+            fi
+            echo "  ✅ Образы удалены перед сборкой"
+            
             # Сборка с принудительным удалением старых образов
-            # Примечание:  не поддерживается в старых версиях Docker Compose
             docker compose build --no-cache --pull --progress=plain --force-rm || {
               echo "❌ Ошибка при пересборке образов"
               echo "📋 Попытка удаления проблемных образов и повторной сборки..."
