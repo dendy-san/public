@@ -18,9 +18,10 @@ services:
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 30s
 
   # Backend сервис (FastAPI) - ГИБРИДНЫЙ РЕЖИМ LLM
   # Режим переключается через переменную ENVIRONMENT в .env (dev/prod)
