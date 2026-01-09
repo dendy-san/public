@@ -176,10 +176,18 @@ jobs:
               docker ps -a
               echo "📋 Статус compose:"
               docker compose ps
-              echo "📋 Логи:"
+              echo "📋 Логи Redis (если контейнер существует):"
+              docker logs public-redis 2>&1 || echo "Контейнер public-redis не найден"
+              echo "📋 Все логи:"
               docker compose logs
               exit 1
             }
+            
+            # Проверка статуса контейнеров после запуска
+            echo "⏳ Ожидание запуска контейнеров (5 секунд)..."
+            sleep 5
+            echo "📋 Статус контейнеров после запуска:"
+            docker ps -a --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep -E "NAMES|public" || docker ps -a
             echo "✅ Контейнеры запущены"
 
             # Шаг 5: Ожидание запуска сервисов
@@ -382,12 +390,22 @@ jobs:
 
             # Финальная проверка и очистка перед запуском
             echo "🔍 Финальная проверка контейнеров перед запуском..."
-            # Принудительное удаление всех контейнеров по именам
-            for name in public-redis public-backend public-frontend public-admin-frontend; do
+            # Сначала удаляем все контейнеры с "public" в имени (включая остановленные)
+            echo "  Удаление всех контейнеров с 'public' в имени..."
+            docker ps -a --format "{{.ID}} {{.Names}} {{.Status}}" | grep -E "public" | while read -r line; do
+              if [ -n "$line" ]; then
+                CONTAINER_ID=$(echo "$line" | awk '{print $1}')
+                CONTAINER_NAME=$(echo "$line" | awk '{print $2}')
+                echo "    Удаление: $CONTAINER_NAME (ID: $CONTAINER_ID, Status: $(echo "$line" | awk '{for(i=3;i<=NF;i++) printf "%s ", $i; print ""}'))"
+                docker rm -f "$CONTAINER_ID" || docker rm -f "$CONTAINER_NAME" || true
+              fi
+            done || true
+            
+            # Дополнительная проверка по конкретным именам
+            for name in public-redis public-backend public-frontend public-admin-frontend public-redis-commander; do
               if docker ps -a --format "{{.Names}}" | grep -q "^${name}$"; then
-                echo "  ⚠️  Контейнер $name все еще существует, принудительное удаление..."
+                echo "  ⚠️  Контейнер $name все еще существует после очистки, принудительное удаление..."
                 docker rm -f "$name" || true
-                # Дополнительная попытка удаления по ID, если имя не сработало
                 CONTAINER_ID=$(docker ps -a --filter "name=^${name}$" --format "{{.ID}}")
                 if [ -n "$CONTAINER_ID" ]; then
                   echo "    Удаление по ID: $CONTAINER_ID"
@@ -395,15 +413,6 @@ jobs:
                 fi
               fi
             done
-            
-            # Удаляем все контейнеры с "public" в имени еще раз для надежности
-            echo "  Финальная очистка всех контейнеров с 'public'..."
-            docker ps -a --format "{{.ID}} {{.Names}}" | grep "public" | awk '{print $1}' | while read -r id; do
-              if [ -n "$id" ]; then
-                echo "    Удаление контейнера по ID: $id"
-                docker rm -f "$id" || true
-              fi
-            done || true
             
             # Запускаем контейнеры
             echo "🚀 Запуск контейнеров предыдущей версии..."
