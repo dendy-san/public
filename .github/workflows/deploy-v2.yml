@@ -443,8 +443,37 @@ jobs:
             }
             
             # Проверка статуса контейнеров после запуска
-            echo "⏳ Ожидание запуска контейнеров (15 секунд)..."
-            sleep 15
+            echo "⏳ Ожидание запуска контейнеров (30 секунд для инициализации)..."
+            sleep 30
+            
+            # Проверка здоровья Redis
+            echo "🔍 Проверка здоровья Redis..."
+            REDIS_HEALTHY=false
+            for i in {1..20}; do
+              # Проверяем через docker inspect
+              HEALTH_STATUS=$(docker inspect --format='{{.State.Health.Status}}' public-redis 2>/dev/null || echo "none")
+              if [ "$HEALTH_STATUS" = "healthy" ]; then
+                echo "  ✅ Redis здоров (статус: $HEALTH_STATUS)"
+                REDIS_HEALTHY=true
+                break
+              elif [ "$HEALTH_STATUS" = "starting" ] || [ "$HEALTH_STATUS" = "none" ]; then
+                echo "  ⏳ Redis еще запускается (статус: $HEALTH_STATUS)... $i/20"
+              else
+                echo "  ⚠️  Redis статус: $HEALTH_STATUS, проверяем ping..."
+                if docker compose exec -T redis redis-cli ping 2>/dev/null | grep -q "PONG"; then
+                  echo "  ✅ Redis отвечает на ping, но статус healthcheck: $HEALTH_STATUS"
+                  REDIS_HEALTHY=true
+                  break
+                fi
+              fi
+              sleep 2
+            done
+            
+            if [ "$REDIS_HEALTHY" != "true" ]; then
+              echo "  ⚠️  Redis не стал healthy, но продолжаем (может быть еще запускается)..."
+              echo "  📋 Логи Redis:"
+              docker compose logs redis --tail=20
+            fi
             
             echo "=== ПРОВЕРКА СТАТУСА ВСЕХ КОНТЕЙНЕРОВ ==="
             docker compose ps
