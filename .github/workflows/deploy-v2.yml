@@ -159,29 +159,21 @@ jobs:
             echo "  Docker compose down --rmi all..."
             docker compose down --rmi all --volumes --remove-orphans 2>/dev/null || true
             
-            # Принудительное удаление образов по именам
+            # Удаляем образы через docker images и xargs (более надежно)
+            echo "  Удаление всех образов с 'public' через docker images..."
+            docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "public-" | xargs -r docker rmi -f 2>/dev/null || true
+            docker images --format "{{.ID}} {{.Repository}}" | grep -E "public" | awk '{print $1}' | xargs -r docker rmi -f 2>/dev/null || true
+            
+            # Принудительное удаление образов по конкретным именам
             for image in public-backend public-frontend public-admin-frontend; do
               echo "  Принудительное удаление образа: $image"
               # Пробуем удалить по полному имени с тегом
               docker rmi -f "${image}:latest" 2>/dev/null || true
               # Пробуем удалить без тега
               docker rmi -f "$image" 2>/dev/null || true
-              # Пробуем найти и удалить по ID
-              IMAGE_ID=$(docker images --format "{{.ID}} {{.Repository}}" | grep "^[^ ]* ${image}$" | awk '{print $1}' | head -1)
-              if [ -n "$IMAGE_ID" ]; then
-                echo "    Удаление образа по ID: $IMAGE_ID"
-                docker rmi -f "$IMAGE_ID" 2>/dev/null || true
-              fi
+              # Пробуем найти и удалить по ID (все варианты)
+              docker images --format "{{.ID}} {{.Repository}}" | grep " ${image}$" | awk '{print $1}' | xargs -r docker rmi -f 2>/dev/null || true
             done
-            
-            # Удаляем все образы с "public" в имени по ID
-            echo "  Удаление всех образов с 'public' в имени..."
-            docker images --format "{{.ID}} {{.Repository}}" | grep -E "public" | awk '{print $1}' | while read -r image_id; do
-              if [ -n "$image_id" ]; then
-                echo "    Удаление образа по ID: $image_id"
-                docker rmi -f "$image_id" 2>/dev/null || true
-              fi
-            done || true
             
             # Удаляем dangling images
             echo "  Очистка dangling images..."
@@ -191,13 +183,20 @@ jobs:
             echo "  Очистка build cache..."
             docker builder prune -f || true
             
-            # Финальная проверка - если образы все еще есть, пробуем еще раз
+            # Финальная проверка и принудительное удаление
             echo "  Финальная проверка образов..."
             REMAINING_IMAGES=$(docker images --format "{{.Repository}}" | grep -E "public-" | wc -l)
             if [ "$REMAINING_IMAGES" -gt 0 ]; then
-              echo "  ⚠️  Все еще осталось $REMAINING_IMAGES образов, принудительное удаление через xargs..."
-              docker images --format "{{.ID}} {{.Repository}}" | grep -E "public-" | awk '{print $1}' | xargs -r docker rmi -f 2>/dev/null || true
+              echo "  ⚠️  Все еще осталось $REMAINING_IMAGES образов, принудительное удаление..."
+              # Пробуем удалить через docker image rm
+              docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "public-" | xargs -r docker image rm -f 2>/dev/null || true
+              # Пробуем удалить через ID
+              docker images --format "{{.ID}} {{.Repository}}" | grep -E "public-" | awk '{print $1}' | xargs -r docker image rm -f 2>/dev/null || true
             fi
+            
+            # Показываем оставшиеся образы для диагностики
+            echo "  Список оставшихся образов:"
+            docker images | grep -E "public|REPOSITORY" || echo "  Нет образов с 'public'"
             
             # Шаг 5: Пересборка образов
             echo "🔨 Пересборка Docker образов..."
@@ -487,35 +486,40 @@ jobs:
             echo "  Сети:"
             docker network ls || echo "  Ошибка при проверке сетей"
 
-            # ГАРАНТИРОВАННОЕ удаление образов перед пересборкой
-            echo "🗑️  ГАРАНТИРОВАННОЕ удаление образов перед пересборкой..."
+            # ПОЛНАЯ ОЧИСТКА Docker перед пересборкой
+            echo "🗑️  ПОЛНАЯ ОЧИСТКА Docker перед пересборкой..."
+            
+            # Останавливаем все контейнеры
+            echo "  Остановка всех контейнеров..."
+            docker compose down --remove-orphans 2>/dev/null || true
+            
+            # Удаляем все образы проекта через docker images | grep
+            echo "  Удаление всех образов проекта через grep..."
+            docker images | grep "public-" | awk '{print $3}' | xargs -r docker rmi -f 2>/dev/null || true
+            
             # Используем docker compose down с удалением всех образов
             echo "  Docker compose down --rmi all..."
             docker compose down --rmi all --volumes --remove-orphans 2>/dev/null || true
             
-            # Принудительное удаление образов по именам
+            # Удаляем образы через docker images и xargs (более надежно)
+            echo "  Удаление всех образов с 'public' через docker images..."
+            docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "public-" | xargs -r docker rmi -f 2>/dev/null || true
+            docker images --format "{{.ID}} {{.Repository}}" | grep -E "public" | awk '{print $1}' | xargs -r docker rmi -f 2>/dev/null || true
+            
+            # Принудительное удаление образов по конкретным именам
             for image in public-backend public-frontend public-admin-frontend; do
               echo "  Принудительное удаление образа: $image"
               # Пробуем удалить по полному имени с тегом
               docker rmi -f "${image}:latest" 2>/dev/null || true
               # Пробуем удалить без тега
               docker rmi -f "$image" 2>/dev/null || true
-              # Пробуем найти и удалить по ID
-              IMAGE_ID=$(docker images --format "{{.ID}} {{.Repository}}" | grep "^[^ ]* ${image}$" | awk '{print $1}' | head -1)
-              if [ -n "$IMAGE_ID" ]; then
-                echo "    Удаление образа по ID: $IMAGE_ID"
-                docker rmi -f "$IMAGE_ID" 2>/dev/null || true
-              fi
+              # Пробуем найти и удалить по ID (все варианты)
+              docker images --format "{{.ID}} {{.Repository}}" | grep " ${image}$" | awk '{print $1}' | xargs -r docker rmi -f 2>/dev/null || true
             done
             
-            # Удаляем все образы с "public" в имени по ID
-            echo "  Удаление всех образов с 'public' в имени..."
-            docker images --format "{{.ID}} {{.Repository}}" | grep -E "public" | awk '{print $1}' | while read -r image_id; do
-              if [ -n "$image_id" ]; then
-                echo "    Удаление образа по ID: $image_id"
-                docker rmi -f "$image_id" 2>/dev/null || true
-              fi
-            done || true
+            # ПОЛНАЯ очистка системы Docker
+            echo "  Полная очистка Docker system (prune -a -f --volumes)..."
+            docker system prune -a -f --volumes 2>/dev/null || echo "  Предупреждение: не удалось выполнить полную очистку"
             
             # Удаляем dangling images
             echo "  Очистка dangling images..."
@@ -525,13 +529,22 @@ jobs:
             echo "  Очистка build cache..."
             docker builder prune -f || true
             
-            # Финальная проверка - если образы все еще есть, пробуем еще раз
+            # Финальная проверка и принудительное удаление
             echo "  Финальная проверка образов..."
             REMAINING_IMAGES=$(docker images --format "{{.Repository}}" | grep -E "public-" | wc -l)
             if [ "$REMAINING_IMAGES" -gt 0 ]; then
-              echo "  ⚠️  Все еще осталось $REMAINING_IMAGES образов, принудительное удаление через xargs..."
-              docker images --format "{{.ID}} {{.Repository}}" | grep -E "public-" | awk '{print $1}' | xargs -r docker rmi -f 2>/dev/null || true
+              echo "  ⚠️  Все еще осталось $REMAINING_IMAGES образов, принудительное удаление..."
+              # Пробуем удалить через docker image rm
+              docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "public-" | xargs -r docker image rm -f 2>/dev/null || true
+              # Пробуем удалить через ID
+              docker images --format "{{.ID}} {{.Repository}}" | grep -E "public-" | awk '{print $1}' | xargs -r docker image rm -f 2>/dev/null || true
+              # Последняя попытка через docker images | grep
+              docker images | grep "public-" | awk '{print $3}' | xargs -r docker rmi -f 2>/dev/null || true
             fi
+            
+            # Показываем оставшиеся образы для диагностики
+            echo "  Список оставшихся образов:"
+            docker images | grep -E "public|REPOSITORY" || echo "  Нет образов с 'public'"
             
             # Пересобираем образы для предыдущей версии
             echo "🔨 Пересборка образов предыдущей версии..."
