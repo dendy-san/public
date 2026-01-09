@@ -168,6 +168,11 @@ jobs:
               fi
             done || true
 
+            # Проверка конфигурации перед запуском
+            echo "🔍 Проверка docker-compose.yml..."
+            echo "=== Содержимое docker-compose.yml (секция redis) ==="
+            grep -A 15 "^  redis:" docker-compose.yml || echo "Секция redis не найдена"
+            
             # Шаг 4: Запуск контейнеров
             echo "🚀 Запуск контейнеров..."
             docker compose up -d --remove-orphans || {
@@ -178,6 +183,12 @@ jobs:
               docker compose ps
               echo "📋 Логи Redis (если контейнер существует):"
               docker logs public-redis 2>&1 || echo "Контейнер public-redis не найден"
+              echo "📋 Попытка запуска Redis вручную для диагностики:"
+              docker run -d --name test-redis-diagnostic redis:7-alpine redis-server --appendonly yes || echo "Не удалось запустить тестовый Redis"
+              sleep 3
+              docker logs test-redis-diagnostic 2>&1 || echo "Не удалось получить логи тестового Redis"
+              docker stop test-redis-diagnostic 2>/dev/null || true
+              docker rm test-redis-diagnostic 2>/dev/null || true
               echo "📋 Все логи:"
               docker compose logs
               exit 1
@@ -188,6 +199,8 @@ jobs:
             sleep 5
             echo "📋 Статус контейнеров после запуска:"
             docker ps -a --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep -E "NAMES|public" || docker ps -a
+            echo "📋 Логи Redis после запуска:"
+            docker logs public-redis 2>&1 || echo "Контейнер public-redis не найден или не запущен"
             echo "✅ Контейнеры запущены"
 
             # Шаг 5: Ожидание запуска сервисов
