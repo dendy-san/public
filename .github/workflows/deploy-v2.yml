@@ -343,6 +343,18 @@ jobs:
             echo "  Проверка удаления образов :latest..."
             docker images | grep -E "public-(backend|frontend|admin-frontend).*latest" || echo "  ✅ Образы :latest удалены"
             
+            # КРИТИЧЕСКАЯ ОЧИСТКА: Удаляем ВСЕ образы с :latest перед сборкой
+            echo "  🔥 Финальное удаление всех образов :latest..."
+            docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "public-(backend|frontend|admin-frontend):latest" | xargs -r docker rmi -f 2>/dev/null || true
+            docker images --format "{{.ID}} {{.Repository}}:{{.Tag}}" | grep -E "public-(backend|frontend|admin-frontend).*latest" | awk '{print $1}' | xargs -r docker rmi -f 2>/dev/null || true
+            
+            # Создаем временный .env файл для передачи переменных в docker-compose
+            echo "  📝 Создание временного .env.deploy файла..."
+            echo "UNIQUE_TAG=\$UNIQUE_TAG" > .env.deploy
+            echo "DEPLOY_ID=\$DEPLOY_ID" >> .env.deploy
+            echo "  Содержимое .env.deploy:"
+            cat .env.deploy
+            
             # Сборка с повторными попытками при ошибках сети
             echo "🔨 Сборка образов с тегом: \$UNIQUE_TAG и ID: \$DEPLOY_ID"
             
@@ -351,7 +363,8 @@ jobs:
             BUILD_SUCCESS=false
             for attempt in \$(seq 1 \$BUILD_ATTEMPTS); do
               echo "  Попытка сборки $attempt/\$BUILD_ATTEMPTS..."
-              if COMPOSE_PROJECT_NAME=public UNIQUE_TAG="\$UNIQUE_TAG" DEPLOY_ID="\$DEPLOY_ID" docker compose build --no-cache --pull --progress=plain --force-rm 2>&1 | tee /tmp/build.log; then
+              # Используем env_file для передачи переменных в docker-compose
+              if env \$(cat .env.deploy | xargs) COMPOSE_PROJECT_NAME=public docker compose --env-file .env.deploy build --no-cache --pull --progress=plain --force-rm 2>&1 | tee /tmp/build.log; then
                 echo "  ✅ Сборка успешна на попытке $attempt"
                 BUILD_SUCCESS=true
                 break
@@ -374,13 +387,27 @@ jobs:
               echo "📋 Финальная попытка удаления проблемных образов..."
               docker images | grep "public-" | awk '{print \$3}' | xargs -r docker rmi -f 2>/dev/null || true
               docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "public-" | xargs -r docker image rm -f 2>/dev/null || true
+              # Финальная критическая очистка образов :latest
+              echo "📋 Финальная критическая очистка образов :latest..."
+              docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "public-(backend|frontend|admin-frontend):latest" | xargs -r docker rmi -f 2>/dev/null || true
+              docker images | grep "public-.*latest" | awk '{print \$3}' | xargs -r docker rmi -f 2>/dev/null || true
               # Финальная попытка сборки
-              COMPOSE_PROJECT_NAME=public UNIQUE_TAG="\$UNIQUE_TAG" DEPLOY_ID="\$DEPLOY_ID" docker compose build --no-cache --pull --progress=plain --force-rm || {
+              export UNIQUE_TAG="\$UNIQUE_TAG"
+              export DEPLOY_ID="\$DEPLOY_ID"
+              COMPOSE_PROJECT_NAME=public docker compose build --no-cache --pull --progress=plain --force-rm || {
                 echo "❌ Ошибка при финальной пересборке образов"
+                echo "📋 Список всех образов:"
+                docker images | grep -E "public|REPOSITORY"
                 docker compose logs
                 exit 1
               }
             fi
+            
+            # Удаляем временный файл
+            rm -f .env.deploy
+            
+            # Удаляем временный файл
+            rm -f .env.deploy
             echo "✅ Образы пересобраны"
 
             # Финальная проверка и очистка перед запуском
