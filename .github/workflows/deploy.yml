@@ -45,9 +45,13 @@ jobs:
             cd "$PROJECT_PATH" || { echo "❌ Директория не найдена: $PROJECT_PATH"; exit 1; }
             
             # Сохранение текущей версии для rollback
-            CURRENT_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "none")
-            echo "$CURRENT_COMMIT" > .previous_version
-            echo "💾 Текущая версия сохранена: $CURRENT_COMMIT"
+            CURRENT_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
+            if [ "$CURRENT_COMMIT" != "unknown" ]; then
+              echo "$CURRENT_COMMIT" > .previous_version
+              echo "💾 Текущая версия сохранена: $CURRENT_COMMIT"
+            else
+              echo "⚠️ Не удалось получить текущий коммит"
+            fi
             
             # Получение последних изменений
             echo "📥 Получение изменений из Git..."
@@ -65,10 +69,12 @@ jobs:
               echo "$CONTAINERS" | xargs -r docker rm -f 2>/dev/null || true
             fi
             # Удаление всех образов с тегами public-
-            PUBLIC_IMAGES=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep "^public-" 2>/dev/null || echo "")
-            if [ -n "$PUBLIC_IMAGES" ] && [ "$PUBLIC_IMAGES" != "" ]; then
-              echo "$PUBLIC_IMAGES" | while read -r img; do
-                [ -n "$img" ] && docker rmi -f "$img" 2>/dev/null || true
+            PUBLIC_IMAGES=$(docker images --format "{{.Repository}}:{{.Tag}}" 2>/dev/null | grep "^public-" 2>/dev/null || true)
+            if [ -n "$PUBLIC_IMAGES" ]; then
+              echo "$PUBLIC_IMAGES" | while IFS= read -r img || [ -n "$img" ]; do
+                if [ -n "$img" ] && [ "$img" != "" ]; then
+                  docker rmi -f "$img" 2>/dev/null || true
+                fi
               done
             fi
             docker network rm public_public-network 2>/dev/null || true
@@ -113,12 +119,7 @@ jobs:
             
             # Проверка здоровья Redis
             echo "🔍 Проверка здоровья Redis..."
-            REDIS_STATUS=""
-            REDIS_PS_OUTPUT=$(docker compose ps redis 2>/dev/null || echo "")
-            if [ -n "$REDIS_PS_OUTPUT" ]; then
-              REDIS_STATUS=$(echo "$REDIS_PS_OUTPUT" | grep -o "healthy" || echo "")
-            fi
-            if [ -n "$REDIS_STATUS" ] && [ "$REDIS_STATUS" = "healthy" ]; then
+            if docker compose ps redis 2>/dev/null | grep -q "healthy"; then
               echo "✅ Redis здоров"
             else
               echo "⚠️ Redis не здоров, но продолжаем..."
@@ -132,8 +133,7 @@ jobs:
             
             while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
               # Используем имя сервиса из docker-compose, а не имя контейнера
-              BACKEND_SERVICE="backend"
-              if docker compose exec -T "$BACKEND_SERVICE" curl -f http://localhost:8000/health > /dev/null 2>&1; then
+              if docker compose exec -T backend curl -f http://localhost:8000/health > /dev/null 2>&1; then
                 echo "✅ Backend здоров"
                 BACKEND_HEALTHY=true
                 break
