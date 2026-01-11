@@ -73,7 +73,7 @@ jobs:
             
             # Проверка здоровья Redis
             echo "🔍 Проверка здоровья Redis..."
-            if docker compose ps redis | grep -q "healthy"; then
+            if docker compose ps redis 2>/dev/null | grep -q "healthy"; then
               echo "✅ Redis здоров"
             else
               echo "⚠️ Redis не здоров, но продолжаем..."
@@ -96,7 +96,7 @@ jobs:
               sleep 5
             done
             
-            if [ "$BACKEND_HEALTHY" = false ]; then
+            if [ "$BACKEND_HEALTHY" = "false" ]; then
               echo "❌ Backend не прошел health check"
               echo "📋 Логи Backend:"
               docker compose logs --tail=50 backend
