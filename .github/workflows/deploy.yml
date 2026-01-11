@@ -33,6 +33,7 @@ jobs:
         run: |
           ssh -i ~/.ssh/deploy_key -p $VPS_SSH_PORT $VPS_USER@$VPS_HOST << 'ENDSSH'
             set -e
+            set +H  # Отключаем history expansion для избежания проблем с !
             
             PROJECT_PATH="${{ secrets.VPS_PROJECT_PATH || '~/public' }}"
             PROJECT_PATH=$(eval echo $PROJECT_PATH)
