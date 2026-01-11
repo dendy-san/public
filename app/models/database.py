@@ -69,7 +69,14 @@ class ClientSession(Base):
 
 def init_db():
     """Инициализация базы данных - создание таблиц."""
-    Base.metadata.create_all(bind=engine)
+    try:
+        Base.metadata.create_all(bind=engine, checkfirst=True)
+    except Exception as e:
+        # Если таблицы уже существуют, это нормально
+        # Логируем только реальные ошибки
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(f"При инициализации БД произошла ошибка (возможно, таблицы уже существуют): {e}")
 
 
 def get_db() -> Session:

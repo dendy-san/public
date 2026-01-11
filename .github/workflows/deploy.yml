@@ -57,19 +57,51 @@ jobs:
             # Агрессивная очистка Docker перед деплоем
             echo "🧹 Очистка Docker перед деплоем..."
             docker compose down --remove-orphans 2>/dev/null || true
+            sleep 2
             CONTAINERS=$(docker ps -aq --filter "name=public-" 2>/dev/null || echo "")
-            if [ -n "$CONTAINERS" ]; then
-              echo "$CONTAINERS" | xargs docker stop 2>/dev/null || true
-              echo "$CONTAINERS" | xargs docker rm 2>/dev/null || true
+            if [ -n "$CONTAINERS" ] && [ "$CONTAINERS" != "" ]; then
+              echo "$CONTAINERS" | xargs -r docker stop 2>/dev/null || true
+              sleep 1
+              echo "$CONTAINERS" | xargs -r docker rm -f 2>/dev/null || true
+            fi
+            # Удаление всех образов с тегами public-
+            PUBLIC_IMAGES=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep "^public-" 2>/dev/null || echo "")
+            if [ -n "$PUBLIC_IMAGES" ] && [ "$PUBLIC_IMAGES" != "" ]; then
+              echo "$PUBLIC_IMAGES" | while read -r img; do
+                [ -n "$img" ] && docker rmi -f "$img" 2>/dev/null || true
+              done
             fi
             docker network rm public_public-network 2>/dev/null || true
             docker network prune -f 2>/dev/null || true
+            # Очистка build cache
+            docker builder prune -af 2>/dev/null || true
+            sleep 2
             
             # Пересборка образов
             echo "🔨 Пересборка Docker образов..."
             DEPLOY_ID=$(date +%s)
             export DEPLOY_ID
-            docker compose build --no-cache || { echo "❌ Ошибка при сборке образов"; exit 1; }
+            UNIQUE_TAG="deploy-${DEPLOY_ID}"
+            export UNIQUE_TAG
+            # Пересборка с повторными попытками
+            BUILD_RETRIES=3
+            BUILD_SUCCESS=false
+            for i in $(seq 1 $BUILD_RETRIES); do
+              echo "🔨 Попытка сборки $i из $BUILD_RETRIES..."
+              if docker compose build --no-cache; then
+                BUILD_SUCCESS=true
+                break
+              else
+                echo "⚠️ Попытка $i не удалась, повтор через 5 секунд..."
+                sleep 5
+                # Дополнительная очистка перед повторной попыткой
+                docker builder prune -af 2>/dev/null || true
+              fi
+            done
+            if [ "$BUILD_SUCCESS" = "false" ]; then
+              echo "❌ Ошибка при сборке образов после $BUILD_RETRIES попыток"
+              exit 1
+            fi
             
             # Запуск контейнеров
             echo "🚀 Запуск контейнеров..."
@@ -81,7 +113,11 @@ jobs:
             
             # Проверка здоровья Redis
             echo "🔍 Проверка здоровья Redis..."
-            REDIS_STATUS=$(docker compose ps redis 2>/dev/null | grep -o "healthy" || echo "")
+            REDIS_STATUS=""
+            REDIS_PS_OUTPUT=$(docker compose ps redis 2>/dev/null || echo "")
+            if [ -n "$REDIS_PS_OUTPUT" ]; then
+              REDIS_STATUS=$(echo "$REDIS_PS_OUTPUT" | grep -o "healthy" || echo "")
+            fi
             if [ -n "$REDIS_STATUS" ] && [ "$REDIS_STATUS" = "healthy" ]; then
               echo "✅ Redis здоров"
             else
@@ -95,7 +131,9 @@ jobs:
             BACKEND_HEALTHY=false
             
             while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-              if docker compose exec -T backend curl -f http://localhost:8000/health > /dev/null 2>&1; then
+              # Используем имя сервиса из docker-compose, а не имя контейнера
+              BACKEND_SERVICE="backend"
+              if docker compose exec -T "$BACKEND_SERVICE" curl -f http://localhost:8000/health > /dev/null 2>&1; then
                 echo "✅ Backend здоров"
                 BACKEND_HEALTHY=true
                 break
