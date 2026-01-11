@@ -54,9 +54,16 @@ jobs:
             git fetch origin
             git pull origin main || { echo "❌ Ошибка при git pull"; exit 1; }
             
-            # Остановка контейнеров
-            echo "🛑 Остановка контейнеров..."
-            docker compose down || echo "⚠️ Контейнеры не были запущены"
+            # Агрессивная очистка Docker перед деплоем
+            echo "🧹 Очистка Docker перед деплоем..."
+            docker compose down --remove-orphans 2>/dev/null || true
+            CONTAINERS=$(docker ps -aq --filter "name=public-" 2>/dev/null || echo "")
+            if [ -n "$CONTAINERS" ]; then
+              echo "$CONTAINERS" | xargs docker stop 2>/dev/null || true
+              echo "$CONTAINERS" | xargs docker rm 2>/dev/null || true
+            fi
+            docker network rm public_public-network 2>/dev/null || true
+            docker network prune -f 2>/dev/null || true
             
             # Пересборка образов
             echo "🔨 Пересборка Docker образов..."
@@ -74,7 +81,8 @@ jobs:
             
             # Проверка здоровья Redis
             echo "🔍 Проверка здоровья Redis..."
-            if docker compose ps redis 2>/dev/null | grep -q "healthy"; then
+            REDIS_STATUS=$(docker compose ps redis 2>/dev/null | grep -o "healthy" || echo "")
+            if [ -n "$REDIS_STATUS" ] && [ "$REDIS_STATUS" = "healthy" ]; then
               echo "✅ Redis здоров"
             else
               echo "⚠️ Redis не здоров, но продолжаем..."
