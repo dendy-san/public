@@ -615,21 +615,30 @@ jobs:
             echo "🔍 Проверка здоровья Redis..."
             REDIS_HEALTHY=false
             for i in {1..20}; do
-              # Проверяем через docker inspect
-              HEALTH_STATUS=$(docker inspect --format='{{.State.Health.Status}}' public-redis 2>/dev/null || echo "none")
-              if [ "$HEALTH_STATUS" = "healthy" ]; then
-                echo "  ✅ Redis здоров (статус: $HEALTH_STATUS)"
+              # Используем docker compose ps для получения правильного имени контейнера
+              REDIS_CONTAINER=$(docker compose ps redis --format json 2>/dev/null | grep -o '"Name":"[^"]*"' | head -1 | cut -d'"' -f4 || echo "")
+              if [ -z "$REDIS_CONTAINER" ]; then
+                # Пробуем через docker compose ps без json
+                REDIS_CONTAINER=$(docker compose ps redis 2>/dev/null | tail -n +2 | awk '{print $1}' | head -1 || echo "")
+              fi
+              
+              # Проверяем через docker compose ps и grep (более надежно)
+              if docker compose ps redis 2>/dev/null | grep -q "healthy"; then
+                echo "  ✅ Redis здоров"
                 REDIS_HEALTHY=true
                 break
-              elif [ "$HEALTH_STATUS" = "starting" ] || [ "$HEALTH_STATUS" = "none" ]; then
-                echo "  ⏳ Redis еще запускается (статус: $HEALTH_STATUS)... $i/20"
-              else
-                echo "  ⚠️  Redis статус: $HEALTH_STATUS, проверяем ping..."
+              elif docker compose ps redis 2>/dev/null | grep -q "starting"; then
+                echo "  ⏳ Redis еще запускается... $i/20"
+              elif docker compose ps redis 2>/dev/null | grep -q "Up"; then
+                # Контейнер запущен, проверяем ping
+                echo "  ⏳ Redis запущен, проверяем ping... $i/20"
                 if docker compose exec -T redis redis-cli ping 2>/dev/null | grep -q "PONG"; then
-                  echo "  ✅ Redis отвечает на ping, но статус healthcheck: $HEALTH_STATUS"
+                  echo "  ✅ Redis отвечает на ping"
                   REDIS_HEALTHY=true
                   break
                 fi
+              else
+                echo "  ⏳ Ожидание запуска Redis... $i/20"
               fi
               sleep 2
             done
