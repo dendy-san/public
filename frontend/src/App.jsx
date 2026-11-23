@@ -7,6 +7,7 @@ import AnalysisResults from './components/AnalysisResults'
 import LoadingSpinner from './components/LoadingSpinner'
 import EmailCheck from './components/EmailCheck'
 import PaymentForm from './components/PaymentForm'
+import { STYLE_COUNT } from './components/styles'
 
 function App() {
   const [email, setEmail] = useState('')
@@ -196,7 +197,7 @@ function App() {
     await checkSession(emailValue)
   }
 
-  const handleAnalyze = async (siteUrl, style = 'убедительно-позитивном', occasionText = '') => {
+  const handleAnalyze = async (siteUrl, style = DEFAULT_STYLE, occasionText = '') => {
     if (!sessionValid || !email) {
       setError('Необходимо проверить сеанс перед анализом')
       return

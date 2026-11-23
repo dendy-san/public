@@ -72,3 +72,6 @@ redis-data/
 # Docker override для локальной разработки
 docker-compose.override.yml
 
+# Временные страховочные копии (создаются при наведении порядка в коде)
+_BACKUP_PRECLEANUP/
+

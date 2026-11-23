@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { Mail, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react'
 import axios from 'axios'
+import { STYLE_COUNT } from './styles'
 
 const EmailCheck = ({ onSessionValid, backendUrl = 'http://localhost:8000' }) => {
   const [email, setEmail] = useState('')
@@ -134,7 +135,7 @@ const EmailCheck = ({ onSessionValid, backendUrl = 'http://localhost:8000' }) =>
                   <p className="text-sm text-green-700 mt-1">{sessionInfo.message}</p>
                   {sessionInfo.available_styles && (
                     <div className="mt-2 text-xs text-green-600">
-                      Доступно стилей: {Object.values(sessionInfo.available_styles).filter(v => v === 1).length}/9
+                      Доступно стилей: {Object.values(sessionInfo.available_styles).filter(v => v === 1).length}/{STYLE_COUNT}
                     </div>
                   )}
                 </div>

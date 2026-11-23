@@ -3,7 +3,7 @@ import hashlib
 import os
 from typing import Any, Dict, List, Optional
 
-import aioredis
+import redis.asyncio as redis
 
 
 class CacheService:
@@ -11,18 +11,19 @@ class CacheService:
     
     def __init__(self, redis_url: str = None):
         self.redis_url = redis_url or os.getenv("REDIS_URL", "redis://localhost:6379")
-        self.redis: Optional[aioredis.Redis] = None
+        self.redis: Optional[redis.Redis] = None
         self.default_ttl = 86400  # 24 часа
     
     async def connect(self):
         """Подключение к Redis."""
         if not self.redis:
-            self.redis = await aioredis.from_url(self.redis_url, decode_responses=True)
+            self.redis = await redis.from_url(self.redis_url, decode_responses=True)
     
     async def disconnect(self):
         """Отключение от Redis."""
         if self.redis:
-            await self.redis.close()
+            await self.redis.aclose()
+            self.redis = None
     
     def _generate_key(self, prefix: str, *args) -> str:
         """Генерация ключа кэша."""
@@ -99,16 +100,6 @@ class CacheService:
         """Получить кэшированные промежуточные шаги анализа."""
         key = self._generate_key("steps", url)
         return await self.get(key)
-    
-    async def set_intermediate_steps(
-        self, 
-        url: str, 
-        steps: List[Dict[str, Any]],
-        ttl: int = 172800  # 48 часов
-    ) -> bool:
-        """Сохранить промежуточные шаги анализа в кэш."""
-        key = self._generate_key("steps", url)
-        return await self.set(key, steps, ttl)
     
     async def get_cleaned_text(self, url: str) -> Optional[str]:
         """Получить кэшированный очищенный текст сайта."""

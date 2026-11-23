@@ -1,0 +1,20 @@
+# Нормализация концов строк: в git храним LF, чтобы сборка на Linux
+# (Docker/VPS) была предсказуемой, а Windows-checkout не портил .sh-скрипты.
+* text=auto eol=lf
+
+# Windows-специфичные скрипты должны сохраняться с CRLF
+*.ps1   text eol=crlf
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+
+# Двоичные форматы — не трогаем
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.pdf   binary
+*.tar   binary
+*.db    binary
+*.woff  binary
+*.woff2 binary

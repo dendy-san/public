@@ -9,6 +9,7 @@ from typing import Optional, Dict, Any
 from sqlalchemy.orm import Session
 
 from app.models.database import ClientSession, get_db
+from app.styles import STYLE_KEYS, STYLE_TO_COLUMN
 
 
 class SessionService:
@@ -51,46 +52,19 @@ class SessionService:
     def get_available_styles(self, session: ClientSession) -> Dict[str, int]:
         """Получить доступные стили (где значение = 1)."""
         return {
-            "убедительно-позитивном": session.st1,
-            "ироничном": session.st2,
-            "разговорном": session.st3,
-            "провокационном": session.st4,
-            "информационном": session.st5,
-            "официально-деловом": session.st6,
-            "сторителлинга": session.st7,
-            "продающем": session.st8,
-            "медицинском": session.st9,
+            style: getattr(session, column)
+            for style, column in STYLE_TO_COLUMN.items()
         }
 
     def has_unused_styles(self, session: ClientSession) -> bool:
         """Проверка наличия неиспользованных тем (стилей)."""
-        return any([
-            session.st1 == 1,
-            session.st2 == 1,
-            session.st3 == 1,
-            session.st4 == 1,
-            session.st5 == 1,
-            session.st6 == 1,
-            session.st7 == 1,
-            session.st8 == 1,
-            session.st9 == 1,
-        ])
+        return any(
+            getattr(session, column) == 1 for column in STYLE_TO_COLUMN.values()
+        )
 
     def mark_style_as_used(self, db: Session, session: ClientSession, style: str) -> None:
         """Пометить стиль как использованный (установить в 0)."""
-        style_map = {
-            "убедительно-позитивном": "st1",
-            "ироничном": "st2",
-            "разговорном": "st3",
-            "провокационном": "st4",
-            "информационном": "st5",
-            "официально-деловом": "st6",
-            "сторителлинга": "st7",
-            "продающем": "st8",
-            "медицинском": "st9",
-        }
-
-        style_field = style_map.get(style)
+        style_field = STYLE_TO_COLUMN.get(style)
         if style_field:
             setattr(session, style_field, 0)
             db.commit()

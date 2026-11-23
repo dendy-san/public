@@ -9,6 +9,7 @@ from app.services.llm_client import LLMClient
 from app.services.analyzer import SiteAnalyzer
 from app.models.database import get_db
 from app.services.session_service import session_service
+from app.styles import DEFAULT_STYLE
 
 
 router = APIRouter()
@@ -101,7 +102,7 @@ def chat_json(req: ChatJsonRequest) -> Dict[str, Any]:
 class AnalyzeRequest(BaseModel):
     url: str
     email: EmailStr  # Email клиента для проверки сеанса
-    style: Optional[str] = "убедительно-позитивном"
+    style: Optional[str] = DEFAULT_STYLE
     occasion: Optional[str] = ""
     use_cached: Optional[bool] = False
     cached_intermediate: Optional[List[Dict[str, Any]]] = None
@@ -212,34 +213,20 @@ async def analyze_site_sync(
     # БЛОК 09: Сохранение URL и INFO в БД
     # ВАЖНО: Если данные еще не сохранены (пустые строки), сохраняем их
     # Это может быть первый анализ после оплаты, когда фронтенд еще не сохранил данные
-    import sys
     current_url = session.url if session.url else ""
     current_info = session.info if session.info else ""
-    
-    sys.stdout.write(f"[DEBUG analyze_site_sync] Session before update: url='{current_url}', info='{current_info}'\n")
-    sys.stdout.flush()
-    sys.stdout.write(f"[DEBUG analyze_site_sync] Request data: url='{request.url}', info='{request.occasion}'\n")
-    sys.stdout.flush()
-    
+
     # Сохраняем URL и INFO, если они пустые или изменились
     # ВАЖНО: При первом анализе session.url и session.info пустые, поэтому сохраняем
     url_changed = current_url != request.url
     info_changed = current_info != request.occasion
     url_is_empty = not current_url or current_url.strip() == ""
     info_is_empty = not current_info or current_info.strip() == ""
-    
+
     should_update_url = url_is_empty or url_changed
     should_update_info = info_is_empty or info_changed
-    
-    sys.stdout.write(f"[DEBUG analyze_site_sync] Update check: url_is_empty={url_is_empty}, info_is_empty={info_is_empty}, url_changed={url_changed}, info_changed={info_changed}\n")
-    sys.stdout.flush()
-    sys.stdout.write(f"[DEBUG analyze_site_sync] Should update: url={should_update_url}, info={should_update_info}\n")
-    sys.stdout.flush()
-    
+
     if should_update_url or should_update_info:
-        sys.stdout.write(f"[DEBUG analyze_site_sync] UPDATING session: url='{request.url}', info='{request.occasion}'\n")
-        sys.stdout.flush()
-        
         session_service.update_session(
             db,
             session,
@@ -248,12 +235,6 @@ async def analyze_site_sync(
         )
         # Обновляем сеанс из БД для актуальных данных
         db.refresh(session)
-        
-        sys.stdout.write(f"[DEBUG analyze_site_sync] Session updated: url='{session.url}', info='{session.info}'\n")
-        sys.stdout.flush()
-    else:
-        sys.stdout.write(f"[DEBUG analyze_site_sync] No update needed\n")
-        sys.stdout.flush()
     
     # Определяем, можно ли использовать кэш:
     # 1. Это НЕ первый анализ после оплаты (session.url уже установлен и не пустой)

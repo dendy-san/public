@@ -1,9 +1,10 @@
 import React, { useState } from 'react'
 import { motion } from 'framer-motion'
 import { Search, AlertCircle, ExternalLink } from 'lucide-react'
+import { STYLES, STYLE_VALUES, STYLE_COUNT, DEFAULT_STYLE } from './styles'
 
 const SiteAnalyzer = ({ url, setUrl, occasion, setOccasion, onAnalyze, error, info, urlLocked = false, occasionLocked = false, usedStyles = [], availableStyles = null, email = '' }) => {
-  const [style, setStyle] = useState('убедительно-позитивном')
+  const [style, setStyle] = useState(DEFAULT_STYLE)
 
   // Определяем доступные стили на основе сеанса
   const getAvailableStylesList = () => {
@@ -13,22 +14,13 @@ const SiteAnalyzer = ({ url, setUrl, occasion, setOccasion, onAnalyze, error, in
         .map(([key, _]) => key)
     }
     // Fallback: используем список всех стилей, исключая использованные
-    const allStyles = [
-      'убедительно-позитивном',
-      'ироничном',
-      'разговорном',
-      'провокационном',
-      'информационном',
-      'официально-деловом',
-      'сторителлинга',
-      'продающем',
-      'медицинском'
-    ]
-    return allStyles.filter(s => !usedStyles.includes(s))
+    return STYLE_VALUES.filter((s) => !usedStyles.includes(s))
   }
 
   const availableStylesList = getAvailableStylesList()
-  const totalAvailable = availableStyles ? Object.values(availableStyles).filter(v => v === 1).length : (9 - usedStyles.length)
+  const totalAvailable = availableStyles
+    ? Object.values(availableStyles).filter((v) => v === 1).length
+    : STYLE_COUNT - usedStyles.length
 
   const handleSubmit = (e) => {
     e.preventDefault()
@@ -130,7 +122,7 @@ const SiteAnalyzer = ({ url, setUrl, occasion, setOccasion, onAnalyze, error, in
 
           <div>
             <label htmlFor="style" className="block text-sm font-medium text-gray-700 mb-2">
-              Публиковать в стиле: <span className="text-sm text-gray-500">({totalAvailable}/9 доступно)</span>
+              Публиковать в стиле: <span className="text-sm text-gray-500">({totalAvailable}/{STYLE_COUNT} доступно)</span>
             </label>
             <select
               id="style"
@@ -142,35 +134,16 @@ const SiteAnalyzer = ({ url, setUrl, occasion, setOccasion, onAnalyze, error, in
               {availableStylesList.length === 0 ? (
                 <option value="">Все стили использованы</option>
               ) : (
-                <>
-                  <option value="убедительно-позитивном" disabled={!availableStylesList.includes('убедительно-позитивном')}>
-                    {usedStyles.includes('убедительно-позитивном') ? '✓ ' : ''}Убедительно-позитивном
+                STYLES.map(({ value, label }) => (
+                  <option
+                    key={value}
+                    value={value}
+                    disabled={!availableStylesList.includes(value)}
+                  >
+                    {usedStyles.includes(value) ? '✓ ' : ''}
+                    {label}
                   </option>
-                  <option value="ироничном" disabled={!availableStylesList.includes('ироничном')}>
-                    {usedStyles.includes('ироничном') ? '✓ ' : ''}Ироничном
-                  </option>
-                  <option value="разговорном" disabled={!availableStylesList.includes('разговорном')}>
-                    {usedStyles.includes('разговорном') ? '✓ ' : ''}Разговорном
-                  </option>
-                  <option value="провокационном" disabled={!availableStylesList.includes('провокационном')}>
-                    {usedStyles.includes('провокационном') ? '✓ ' : ''}Провокационном
-                  </option>
-                  <option value="информационном" disabled={!availableStylesList.includes('информационном')}>
-                    {usedStyles.includes('информационном') ? '✓ ' : ''}Информационном
-                  </option>
-                  <option value="официально-деловом" disabled={!availableStylesList.includes('официально-деловом')}>
-                    {usedStyles.includes('официально-деловом') ? '✓ ' : ''}Официально-деловом
-                  </option>
-                  <option value="сторителлинга" disabled={!availableStylesList.includes('сторителлинга')}>
-                    {usedStyles.includes('сторителлинга') ? '✓ ' : ''}Сторителлинга
-                  </option>
-                  <option value="продающем" disabled={!availableStylesList.includes('продающем')}>
-                    {usedStyles.includes('продающем') ? '✓ ' : ''}Продающем
-                  </option>
-                  <option value="медицинском" disabled={!availableStylesList.includes('медицинском')}>
-                    {usedStyles.includes('медицинском') ? '✓ ' : ''}Медицинском
-                  </option>
-                </>
+                ))
               )}
             </select>
             {/* Сообщение "Все стили использованы" убрано - показывается модальное окно при попытке анализа */}

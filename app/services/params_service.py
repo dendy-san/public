@@ -5,21 +5,29 @@ import os
 import json
 from datetime import datetime
 from typing import Optional, Dict, List, Any
-import aioredis
+
+import redis.asyncio as redis
 
 
 class ParamsService:
     """Сервис управления параметрами W (длительность сеанса) и Price (цена)."""
-    
+
     def __init__(self):
         self.redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
-        self.redis: Optional[aioredis.Redis] = None
-    
+        self.redis: Optional[redis.Redis] = None
+
     async def _get_redis(self):
         """Получить подключение к Redis."""
         if not self.redis:
-            self.redis = await aioredis.from_url(self.redis_url, decode_responses=True)
+            self.redis = await redis.from_url(self.redis_url, decode_responses=True)
         return self.redis
+
+    async def close(self):
+        """Закрыть соединение с Redis."""
+        if self.redis:
+            await self.redis.aclose()
+            self.redis = None
+
     
     async def initialize_from_env(self):
         """
