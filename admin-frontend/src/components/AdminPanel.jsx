@@ -183,9 +183,10 @@ function AdminPanel() {
     loadSnapshots()
   }, [])
 
+  // Каркас страницы (min-h-screen, max-w-7xl, переключатель разделов)
+  // находится в App.jsx — здесь только содержимое раздела «Параметры».
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-6">
-      <div className="max-w-7xl mx-auto">
+    <>
         {/* Заголовок */}
         <div className="mb-6">
           <h1 className="text-3xl font-bold text-gray-800 flex items-center gap-3">
@@ -390,8 +391,7 @@ function AdminPanel() {
             </div>
           </div>
         </div>
-      </div>
-    </div>
+    </>
   )
 }
 

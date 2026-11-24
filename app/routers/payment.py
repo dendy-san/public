@@ -3,21 +3,45 @@
 """
 from typing import Dict, Any, Optional
 from fastapi import APIRouter, HTTPException, Depends, Request
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, field_validator
 from sqlalchemy.orm import Session
 
 from app.models.database import get_db
 from app.services.payment_service import payment_service
 from app.services.session_service import session_service
 from app.services.params_service import params_service
+from app.services.lead_service import lead_service
 
 
 router = APIRouter()
 
 
+def _client_ip(request: Request) -> str:
+    """IP клиента за реверс-прокси (nginx ставит X-Forwarded-For)."""
+    forwarded = request.headers.get("x-forwarded-for", "")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else ""
+
+
 class PaymentRequest(BaseModel):
     email: EmailStr
+    # Согласия на обработку ПДн и с офертой. Обязательны для создания платежа:
+    # без них оплата невозможна, а не только не отправляется с фронтенда —
+    # иначе ограничение можно обойти прямым POST-запросом.
+    consent_pd: bool
+    consent_offer: bool
+    source: Optional[str] = None
     # amount и duration_minutes не принимаются от клиента - берутся из Redis (админ-панель) или .env
+
+    @field_validator("consent_pd", "consent_offer")
+    @classmethod
+    def _consent_required(cls, v: bool) -> bool:
+        if not v:
+            raise ValueError(
+                "Требуется согласие на обработку персональных данных и с офертой"
+            )
+        return v
 
 
 class PaymentResponse(BaseModel):
@@ -28,12 +52,16 @@ class PaymentResponse(BaseModel):
 
 @router.post("/create", response_model=PaymentResponse)
 async def create_payment(
-    request: PaymentRequest,
+    request: Request,
+    payload: PaymentRequest,
     db: Session = Depends(get_db)
 ) -> PaymentResponse:
     """
     БЛОК 06: Обновление параметров W, Price, Shop ID и Ykassa API из админ-панели (Redis).
     БЛОК 06: ОПЛАТА - создание платежа в ЮКассе с обновленными параметрами.
+
+    Перед созданием платежа фиксируется лид со согласиями: ПДн обрабатываются
+    только после того, как согласие получено, поэтому захват идёт первым.
     """
     if not payment_service:
         raise HTTPException(
@@ -42,19 +70,11 @@ async def create_payment(
         )
 
     try:
-        # БЛОК 06: Обновление параметров W, Price, Shop ID и Ykassa API значениями из админ-панели (Redis)
-        # Параметры уже находятся в Redis (устанавливаются через админ-панель или инициализируются из .env при старте)
-        # Явно загружаем параметры из Redis перед созданием платежа
-        try:
-            await params_service.get_all_params()  # Загружаем все параметры из Redis
-        except Exception:
-            pass  # Игнорируем ошибки, если Redis недоступен - будут использованы значения из .env
-        
         # БЛОК 06: ОПЛАТА - создание платежа в ЮКассе с параметрами из Redis
         # payment_service автоматически получает все параметры (W, Price, ShopID, Ykassa_API) из Redis при создании платежа
         payment_data = await payment_service.create_payment(
-            email=request.email,
-            description=f"Оплата сеанса генерации публикаций для {request.email}",
+            email=payload.email,
+            description=f"Оплата сеанса генерации публикаций для {payload.email}",
             duration_minutes=None,  # W будет получен из Redis в payment_service
         )
 
@@ -67,12 +87,31 @@ async def create_payment(
                 detail="Не удалось создать платеж. ЮКасса вернула неполные данные."
             )
 
+        # Лид фиксируется после успешного создания платежа в ЮKassa: если
+        # платёж не создан, «лида, который не смог оплатить» мы не заводим.
+        # Статус new; webhook или /status переведут его в paid.
+        try:
+            lead_service.capture(
+                db,
+                email=payload.email,
+                consent_pd=payload.consent_pd,
+                consent_offer=payload.consent_offer,
+                ip=_client_ip(request),
+                user_agent=request.headers.get("user-agent", ""),
+                source=payload.source or "",
+            )
+        except Exception as e:
+            # Ошибка записи лида не должна ломать оплату клиенту.
+            print(f"[Payment] Не удалось зафиксировать лид: {e}")
+
         return PaymentResponse(
             payment_id=payment_id,
             confirmation_url=confirmation_url,
             status=payment_data.get("status", "pending")
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -153,6 +192,13 @@ async def payment_webhook(
             db, email, payment_id=payment_id,
             amount=amount, duration_minutes=duration_minutes
         )
+
+        # Лид: оплата подтверждена сервером, а не телом уведомления.
+        try:
+            lead_service.mark_paid(db, email, payment_id=payment_id, amount=amount)
+        except Exception as e:
+            print(f"[Webhook] Не удалось обновить лид: {e}")
+
         return {"status": "ok", "message": "Сеанс создан"}
 
     except HTTPException:
@@ -204,6 +250,13 @@ async def get_payment_status(
             if email:
                 # БЛОК 07: ФОРМИРОВАНИЕ КЛИЕНТСКОЙ ЗАПИСИ в базе с параметрами W и Price из Redis
                 session_service.create_session(db, email, payment_id=payment_id, amount=amount, duration_minutes=duration_minutes)
+
+                # Лид переводится в paid тем же путём, что и в webhook:
+                # /status — резервная цепочка на случай недоставки уведомления.
+                try:
+                    lead_service.mark_paid(db, email, payment_id=payment_id, amount=amount)
+                except Exception as e:
+                    print(f"[Payment status] Не удалось обновить лид: {e}")
 
         return {
             "payment_id": payment_id,

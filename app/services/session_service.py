@@ -136,12 +136,29 @@ class SessionService:
         db.refresh(session)
         return session
 
-    def delete_session(self, db: Session, email: str) -> None:
-        """Удаление записи из базы."""
+    def delete_session(self, db: Session, email: str, reason: Optional[str] = None) -> None:
+        """
+        Удаление записи из базы.
+
+        reason="expired" — сеанс удалён потому, что истекло время. Тогда же
+        обновляется лид: человек заплатил, но не воспользовался, и в воронке
+        это отдельный исход (срок хранения ПДн при этом не сокращается —
+        удаление по delete_after остаётся самостоятельным).
+        Завершение сеанса по другой причине (исчерпаны стили, клиент удалил
+        сам) статус лида не меняет: оплата была, и paid остаётся верным.
+        """
         session = self.get_session_by_email(db, email)
         if session:
             db.delete(session)
             db.commit()
+
+        if reason == "expired":
+            try:
+                from app.services.lead_service import lead_service
+                lead_service.mark_expired(db, email)
+            except Exception as e:
+                # Ошибка статуса лида не должна рвать удаление сеанса.
+                print(f"[SessionService] Не удалось обновить статус лида: {e}")
 
 
 # Глобальный экземпляр сервиса

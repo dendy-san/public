@@ -75,7 +75,8 @@ dist
 
 # Gatsby files
 .cache/
-public
+# NOTE: public/ is NOT ignored here — Vite treats it as source statics
+# (privacy.html, offer.html) that must be committed and copied into dist.
 
 # Storybook build outputs
 .out

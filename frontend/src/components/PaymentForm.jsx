@@ -13,6 +13,19 @@ const PaymentForm = ({ email, onPaymentSuccess, onClose, backendUrl = import.met
   const [paymentId, setPaymentId] = useState(null)
   const [isCheckingStatus, setIsCheckingStatus] = useState(false)
 
+  // Согласия (ФЗ-152). Отметка обязательна: бэкенд не создаст платёж без них,
+  // поэтому блокировать кнопку нужно и на клиенте — иначе пользователь
+  // получит отказ только после нажатия.
+  const [consentPd, setConsentPd] = useState(false)
+  const [consentOffer, setConsentOffer] = useState(false)
+  const consentsGiven = consentPd && consentOffer
+
+  // Источник трафика (utm-метка лендинга) — пишется в лид для воронки.
+  const utmSource = (() => {
+    const params = new URLSearchParams(window.location.search)
+    return params.get('utm_source') || params.get('source') || ''
+  })()
+
   // Форматирование продолжительности: минуты если < 60, иначе часы с округлением вниз
   const formatDuration = (minutes) => {
     if (!minutes) return { value: 24, unit: 'часа' } // Значение по умолчанию
@@ -85,6 +98,12 @@ const PaymentForm = ({ email, onPaymentSuccess, onClose, backendUrl = import.met
   const handlePayment = async (e) => {
     e.preventDefault()
     if (!email.trim()) return
+    // Согласия проверяются и на бэкенде; здесь — чтобы не слать заведомо
+    // отвергнутый запрос.
+    if (!consentsGiven) {
+      setError('Для оплаты необходимо согласиться с обработкой персональных данных и офертой')
+      return
+    }
 
     setIsProcessing(true)
     setError(null)
@@ -94,7 +113,10 @@ const PaymentForm = ({ email, onPaymentSuccess, onClose, backendUrl = import.met
       const response = await axios.post(
         `${backendUrl}/payment/create`,
         {
-          email: email.trim()
+          email: email.trim(),
+          consent_pd: consentPd,
+          consent_offer: consentOffer,
+          source: utmSource,
           // amount не передается - берется из .env на бэкенде
         },
         {
@@ -280,10 +302,49 @@ const PaymentForm = ({ email, onPaymentSuccess, onClose, backendUrl = import.met
 
           {/* Блок "Оплата создана" убран - показываем только модальное окно оплаты */}
 
+          {/* Согласия (ФЗ-152): обязательны для создания платежа */}
+          <div className="space-y-3 pt-2">
+            <label className="flex items-start gap-3 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={consentPd}
+                onChange={(e) => setConsentPd(e.target.checked)}
+                className="mt-0.5 w-4 h-4 text-primary-600 border-gray-300 rounded focus:ring-primary-500"
+              />
+              <span className="text-sm text-gray-700">
+                Согласен на обработку персональных данных в соответствии с{' '}
+                <a href="/privacy.html" target="_blank" rel="noopener noreferrer" className="text-primary-600 underline">
+                  политикой конфиденциальности
+                </a>
+              </span>
+            </label>
+
+            <label className="flex items-start gap-3 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={consentOffer}
+                onChange={(e) => setConsentOffer(e.target.checked)}
+                className="mt-0.5 w-4 h-4 text-primary-600 border-gray-300 rounded focus:ring-primary-500"
+              />
+              <span className="text-sm text-gray-700">
+                Принимаю условия{' '}
+                <a href="/offer.html" target="_blank" rel="noopener noreferrer" className="text-primary-600 underline">
+                  публичной оферты
+                </a>
+              </span>
+            </label>
+
+            {!consentsGiven && (
+              <p className="text-xs text-gray-500">
+                Отметьте оба согласия, чтобы продолжить оплату.
+              </p>
+            )}
+          </div>
+
           <div className="space-y-3">
             <motion.button
               type="submit"
-              disabled={!isValidEmail(email) || !price || isProcessing || isCheckingStatus}
+              disabled={!isValidEmail(email) || !price || !consentsGiven || isProcessing || isCheckingStatus}
               className="btn-primary w-full disabled:opacity-50 disabled:cursor-not-allowed"
               whileHover={{ scale: 1.02 }}
               whileTap={{ scale: 0.98 }}

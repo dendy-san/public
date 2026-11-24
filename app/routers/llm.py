@@ -181,7 +181,7 @@ async def analyze_site(
         
         # Проверяем время сеанса ПОСЛЕ генерации (блок 18)
         if not is_time_valid:
-            session_service.delete_session(db, request.email)
+            session_service.delete_session(db, request.email, reason="expired")
             result['session_ended'] = True
             result['message'] = 'Время сеанса истекло. Сеанс завершен.'
             return result  # Возвращаем результат, даже если сеанс истек

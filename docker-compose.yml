@@ -36,8 +36,14 @@ services:
       - "8000:8000"
     environment:
       - REDIS_URL=redis://redis:6379
+      # База лежит на volume, а не внутри контейнера: на слое образа SQLite
+      # теряется при пересоздании контейнера, а в ней персональные данные.
+      # Переопределяет DB_PATH из .env (секция environment приоритетнее).
+      - DB_PATH=/data/sessions.db
       # ENVIRONMENT будет браться из .env (dev для разработки, prod для production)
       # По умолчанию используется prod, если не указано в .env
+    volumes:
+      - sqlite-data:/data
     env_file:
       - .env
     depends_on:
@@ -113,6 +119,9 @@ services:
 
 volumes:
   redis-data:
+  # Персональные данные клиентов: база должна переживать пересоздание
+  # контейнера и пересборку образа.
+  sqlite-data:
 
 networks:
   public-network:

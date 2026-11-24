@@ -4,11 +4,16 @@
 Безопасность: реальный API-ключ ЮKассы никогда не отдаётся на фронтенд.
 Везде, где ключ мог бы покинуть бэкенд, возвращается маска (см. mask_secret).
 """
+from datetime import datetime
 from typing import Dict, Any, Optional
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends, Response
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
+from app.models.database import get_db
 from app.services.params_service import params_service, mask_secret
+from app.services.lead_service import lead_service
 
 
 router = APIRouter()
@@ -185,3 +190,61 @@ async def get_param_history(
         "history": history,
         "count": len(history),
     }
+
+
+# ================================================================
+# Лиды: воронка, список, CSV-экспорт
+# ================================================================
+
+
+class LeadListResponse(BaseModel):
+    leads: list
+    total: int
+    funnel: Dict[str, Any]
+
+
+@router.get("/leads", response_model=LeadListResponse)
+async def list_leads(
+    status: Optional[str] = Query(None, description="all / new / paid / expired"),
+    date_from: Optional[str] = Query(None, description="YYYY-MM-DD или ISO datetime"),
+    date_to: Optional[str] = Query(None, description="YYYY-MM-DD или ISO datetime"),
+    search: Optional[str] = Query(None, description="поиск по email"),
+    limit: int = Query(50, ge=1, le=500, description="страница"),
+    offset: int = Query(0, ge=0, description="смещение"),
+    db: Session = Depends(get_db),
+) -> LeadListResponse:
+    """
+    Список лидов с фильтрами и пагинацией + счётчики воронки.
+
+    Воронка возвращается здесь же, отдельный эндпоинт для неё не нужен:
+    она считается по всей таблице и не зависит от фильтров списка.
+    """
+    lead_service.purge_expired(db)
+    rows, total = lead_service.list_leads(db, status, date_from, date_to, search, limit, offset)
+    return LeadListResponse(leads=rows, total=total, funnel=lead_service.funnel(db))
+
+
+@router.get("/leads/export")
+async def export_leads_csv(
+    status: Optional[str] = Query(None),
+    date_from: Optional[str] = Query(None),
+    date_to: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+) -> PlainTextResponse:
+    """
+    CSV-экспорт всех выбранных записей (без пагинации).
+
+    UTF-8 с BOM: без него Excel откроет кириллицу кракозябрами.
+    """
+    lead_service.purge_expired(db)
+    content = lead_service.export_csv(db, status, date_from, date_to, search)
+
+    now = datetime.now().strftime("%Y-%m-%d")
+    return PlainTextResponse(
+        content=content,
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="leads_{now}.csv"',
+        },
+    )

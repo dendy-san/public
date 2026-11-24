@@ -57,7 +57,7 @@ async def check_session(
     if not is_time_valid:
         # БЛОК 03: ПРОВЕРКА ВРЕМЕНИ сеанса: НЕТ (время истекло)
         # БЛОК 04: УДАЛЕНИЕ ЗАПИСИ из базы
-        session_service.delete_session(db, email)
+        session_service.delete_session(db, email, reason="expired")
         # БЛОК 05: Сообщение об отсутствии оплаченной услуги
         # Переход на блок 06: обновление параметров и оплата
         return SessionCheckResponse(
@@ -101,7 +101,7 @@ async def update_session(
 
     # Проверяем время
     if not session_service.check_session_time(session):
-        session_service.delete_session(db, email)
+        session_service.delete_session(db, email, reason="expired")
         raise HTTPException(
             status_code=410,
             detail="Время сеанса истекло"
@@ -139,7 +139,7 @@ async def get_available_styles(
 
     # Проверяем время
     if not session_service.check_session_time(session):
-        session_service.delete_session(db, email)
+        session_service.delete_session(db, email, reason="expired")
         raise HTTPException(
             status_code=410,
             detail="Время сеанса истекло"
@@ -174,7 +174,7 @@ async def mark_style_used(
 
     # Проверяем время
     if not session_service.check_session_time(session):
-        session_service.delete_session(db, email)
+        session_service.delete_session(db, email, reason="expired")
         raise HTTPException(
             status_code=410,
             detail="Время сеанса истекло"
