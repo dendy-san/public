@@ -18,8 +18,8 @@ COPY app/ ./app/
 COPY gunicorn.conf.py .
 COPY start.sh .
 
-# Делаем start.sh исполняемым
-RUN chmod +x start.sh
+# Нормализация концов строк (защита от CRLF при клоне на Windows) и права
+RUN sed -i 's/\r$//' start.sh && chmod +x start.sh
 
 # Открытие порта
 EXPOSE 8000
