@@ -9,16 +9,25 @@
 #
 # 2. Production (prod): убедитесь, что docker-compose.override.yml отсутствует или закомментирован
 #    Убедитесь, что в .env установлено ENVIRONMENT=prod
-#    Запуск: docker compose up --build
+#    Запуск: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 
 version: '3.8'
 
 services:
+  # В dev режиме монтируем код для hot-reload (автоматическая перезагрузка при изменении файлов)
   backend:
-    # В dev режиме монтируем код для hot-reload (автоматическая перезагрузка при изменении файлов)
     volumes:
       - ./app:/app/app
-    # Переопределяем ENVIRONMENT для dev (если нужно, можно оставить в .env)
-    # environment:
-    #   - ENVIRONMENT=dev
+    # В dev режиме публикуем API наружу для прямого доступа и Swagger
+    ports:
+      - "8000:8000"
 
+  # Фронтенд и админка в dev-режиме тоже должны быть доступны локально
+  # (в prod они доступны только через Caddy на 80/443)
+  frontend:
+    ports:
+      - "3000:80"
+
+  admin-frontend:
+    ports:
+      - "3001:80"

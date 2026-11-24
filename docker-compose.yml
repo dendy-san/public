@@ -1,23 +1,43 @@
 # Универсальный docker-compose.yml для dev и prod
 # Режим определяется переменной ENVIRONMENT в .env (dev/prod)
-# Для dev: создайте docker-compose.override.yml с volumes (см. docker-compose.override.yml.example)
-# Запуск: docker compose up --build
+#
+# БЕЗОПАСНОСТЬ ПО УМОЛЧАНИЮ: наружу не публикуется ничего, кроме 80/443.
+# Прошлый сервер был заблокирован хостером именно из-за "6379:6379" —
+# Redis без пароля оказался доступен из интернета. Поэтому:
+#   - у redis, backend и фронтов здесь НЕТ секции ports;
+#   - доступ к ним только из внутренней сети public-network;
+#   - вход снаружи — через reverse-proxy (Caddy, docker-compose.prod.yml);
+#   - локальная разработка получает порты через docker-compose.override.yml
+#     (файл не попадает в git, см. docker-compose.override.yml.example).
+#
+# Запуск dev:  cp docker-compose.override.yml.example docker-compose.override.yml
+#             docker compose up --build
+# Запуск prod: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 
 services:
-  # Redis для кэширования и фоновых задач
+  # Redis: кэш, параметры W/Price, лимиты запросов, история снимков
   redis:
     image: redis:7-alpine
     container_name: public-redis${DEPLOY_ID:+-${DEPLOY_ID}}
-    command: redis-server --appendonly yes
-    ports:
-      - "6379:6379"
+    # requirepass обязателен: Redis хранит параметры услуги и счётчики
+    # лимитов, а доступ к нему извне позволяет как читать данные, так и
+    # использовать сервер для сканирования чужих сетей.
+    # Формула с условием, а не --requirepass "${REDIS_PASSWORD}": пустая
+    # строка в requirepass трактуется Redis неоднозначно, поэтому при
+    # пустом пароле флаг просто не добавляется (это допустимо только dev).
+    command: >
+      sh -c 'if [ -n "$REDIS_PASSWORD" ]; then
+      exec redis-server --appendonly yes --requirepass "$REDIS_PASSWORD";
+      else exec redis-server --appendonly yes; fi'
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
     volumes:
       - redis-data:/data
     networks:
       - public-network
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "if [ -n \"$REDIS_PASSWORD\" ]; then redis-cli -a \"$REDIS_PASSWORD\" ping; else redis-cli ping; fi | grep -q PONG"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -25,23 +45,25 @@ services:
 
   # Backend сервис (FastAPI) - ГИБРИДНЫЙ РЕЖИМ LLM
   # Режим переключается через переменную ENVIRONMENT в .env (dev/prod)
-  # start.sh автоматически выберет uvicorn (dev) или gunicorn (prod) на основе ENVIRONMENT
+  # start.sh автоматически выберет uvicorn (dev) или gunicorn (prod)
   backend:
     image: public-backend:${UNIQUE_TAG:-latest}
     build:
       context: .
       dockerfile: Dockerfile
     container_name: public-backend${DEPLOY_ID:+-${DEPLOY_ID}}
-    ports:
-      - "8000:8000"
+    # ports не публикуем: к API обращаются через reverse-proxy фронта (nginx
+    # внутри контейнера frontend) и через Caddy. Прямой доступ по 8000 наружу
+    # обошёл бы CORS, лимиты запросов и будущий TLS.
     environment:
-      - REDIS_URL=redis://redis:6379
+      # Пароль Redis подставляется в URL; пустой REDIS_PASSWORD даёт
+      # redis://:@redis:6379/0, что redis-py трактует как "без пароля".
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
       # База лежит на volume, а не внутри контейнера: на слое образа SQLite
       # теряется при пересоздании контейнера, а в ней персональные данные.
       # Переопределяет DB_PATH из .env (секция environment приоритетнее).
       - DB_PATH=/data/sessions.db
-      # ENVIRONMENT будет браться из .env (dev для разработки, prod для production)
-      # По умолчанию используется prod, если не указано в .env
+      # ENVIRONMENT берётся из .env (dev для разработки, prod для production)
     volumes:
       - sqlite-data:/data
     env_file:
@@ -59,29 +81,17 @@ services:
       retries: 3
       start_period: 40s
 
-  # Веб-интерфейс для управления Redis
-  redis-commander:
-    image: rediscommander/redis-commander:latest
-    container_name: public-redis-commander
-    environment:
-      - REDIS_HOSTS=local:redis:6379
-    ports:
-      - "8081:8081"
-    depends_on:
-      - redis
-    networks:
-      - public-network
-    restart: unless-stopped
-
-  # Frontend сервис (React + Vite + Nginx)
+  # Веб-интерфейс клиента (React + Vite + Nginx)
+  # nginx внутри контейнера раздаёт SPA и проксирует /llm, /payment, /session
+  # на backend:8000 — поэтому фронту не нужен опубликованный порт API.
   frontend:
     image: public-frontend:${UNIQUE_TAG:-latest}
     build:
       context: ./frontend
       dockerfile: Dockerfile
     container_name: public-frontend${DEPLOY_ID:+-${DEPLOY_ID}}
-    ports:
-      - "3000:80"
+    expose:
+      - "80"
     depends_on:
       backend:
         condition: service_healthy
@@ -102,8 +112,8 @@ services:
       context: ./admin-frontend
       dockerfile: Dockerfile
     container_name: public-admin-frontend${DEPLOY_ID:+-${DEPLOY_ID}}
-    ports:
-      - "3001:80"
+    expose:
+      - "80"
     depends_on:
       backend:
         condition: service_healthy

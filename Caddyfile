@@ -1,0 +1,50 @@
+{
+	# Админ-API Caddy отключён: он не нужен, а по умолчанию слушает
+	# localhost:2019 внутри контейнера.
+	admin off
+}
+
+# Клиентский сайт: SPA + reverse-proxy API внутри nginx контейнера frontend.
+#
+# nginx во frontend проксирует /llm, /payment, /session, /admin, /health на
+# backend:8000, поэтому отдельный маршрут для API здесь не нужен — webhook
+# ЮKassa (/payment/webhook) приходит этим же путём.
+#
+# Реальный IP клиента: Caddy проставляет X-Forwarded-For автоматически,
+# nginx добавляет к нему свой адрес, а _client_ip() в backend берёт первую
+# запись. Без этого в лидах писались бы внутренние адреса docker (172.x).
+{$SITE_DOMAIN} {
+	encode zstd gzip
+
+	# HSTS: после первого визита браузер ходит только по HTTPS.
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		# Скрываем версию Caddy/nginx из ответов.
+		-Server
+	}
+
+	reverse_proxy frontend:80
+}
+
+# Админ-панель: отдельный поддомен, а не путь /admin/.
+#
+# Vite собирает админку с base="/", поэтому на пути /admin/ она запрашивала
+# бы /assets/... и получала SPA клиента вместо собственных JS.
+#
+# ВАЖНО: доступ к данным защищён на уровне backend (ADMIN_TOKEN,
+# app/services/admin_auth.py), а не этим конфигом — прямой запрос к
+# /admin/leads мимо панели всё равно требует токен.
+{$ADMIN_DOMAIN} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		# Панель не должна попадать в поисковики и открываться в iframe
+		# (защита от clickjacking и от случайной публикации адреса).
+		X-Robots-Tag "noindex, nofollow"
+		X-Frame-Options "DENY"
+		-Server
+	}
+
+	reverse_proxy admin-frontend:80
+}

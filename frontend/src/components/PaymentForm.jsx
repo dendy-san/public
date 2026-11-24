@@ -67,23 +67,12 @@ const PaymentForm = ({ email, onPaymentSuccess, onClose, backendUrl = import.met
   useEffect(() => {
     const fetchParams = async () => {
       try {
-        // Загружаем цену и продолжительность (W) из одного эндпоинта
+        // /payment/price отдаёт и цену, и длительность (W) — публичный
+        // эндпоинт, не требующий админского токена.
         const response = await axios.get(`${backendUrl}/payment/price`)
         setPrice(response.data.price)
-        // Проверяем, есть ли duration_minutes в ответе (новый формат) или загружаем отдельно
         if (response.data.duration_minutes !== undefined) {
-          console.log('Loaded W parameter:', response.data.duration_minutes, 'minutes')
           setDurationMinutes(response.data.duration_minutes)
-        } else {
-          // Fallback: загружаем отдельно из админ-эндпоинта
-          try {
-            const durationResponse = await axios.get(`${backendUrl}/admin/params/W`)
-            console.log('Loaded W parameter from admin endpoint:', durationResponse.data.W)
-            setDurationMinutes(durationResponse.data.W)
-          } catch (durationErr) {
-            console.error('Failed to fetch duration:', durationErr)
-            setDurationMinutes(1440) // 24 часа по умолчанию
-          }
         }
       } catch (err) {
         console.error('Failed to fetch params:', err)

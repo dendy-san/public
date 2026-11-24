@@ -1,0 +1,49 @@
+# Production override: Caddy reverse-proxy + порты 80/443 наружу.
+#
+# Использование:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Требования перед запуском:
+#   1. Заполнить REDIS_PASSWORD в .env (обязательно для prod)
+#   2. Заполнить SITE_DOMAIN и ADMIN_DOMAIN в .env
+#   3. DNS A-записи: SITE_DOMAIN и ADMIN_DOMAIN указывают на IP VPS
+#   4. .env содержит все API-ключи (DeepSeek, OpenAI, ЮKassa)
+#
+# Почему два домена, а не /admin/:
+#   Админка собирается Vite с base="/" и ищет ассеты в /assets/. Если
+#   повесить её на путь /admin/, она будет запрашивать /assets/... вместо
+#   /admin/assets/... и получать SPA клиента вместо своих JS. Переделка
+#   base path потребовала бы пересборки образа под конкретный путь, тогда
+#   как поддомен работает с текущей сборкой без изменений.
+
+services:
+  # Caddy: reverse-proxy, автоматический TLS, маршрутизация к контейнерам
+  caddy:
+    image: caddy:2-alpine
+    container_name: public-caddy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    environment:
+      # Caddyfile подставляет их как {env.SITE_DOMAIN} / {env.ADMIN_DOMAIN}
+      - SITE_DOMAIN=${SITE_DOMAIN}
+      - ADMIN_DOMAIN=${ADMIN_DOMAIN}
+    depends_on:
+      frontend:
+        condition: service_healthy
+      admin-frontend:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - public-network
+
+volumes:
+  # Данные Caddy: сертификаты Let's Encrypt и кэш
+  caddy-data:
+  caddy-config:

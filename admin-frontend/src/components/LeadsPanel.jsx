@@ -1,8 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import axios from 'axios'
 import { Users, Download, Search, AlertCircle, CheckCircle2, TrendingUp } from 'lucide-react'
-
-const API_URL = `${import.meta.env.VITE_API_URL ?? ''}/admin`
+import api, { downloadLeadsExport } from '../api.js'
 
 // Превью перед выгрузкой: 4 поля по всем записям диапазона. Полный набор
 // (14 полей) уходит в CSV — на экране лишние ПДн показывать незачем.
@@ -68,7 +66,7 @@ function LeadsPanel() {
       const p = buildQuery()
       p.set('limit', PAGE_SIZE)
       p.set('offset', page * PAGE_SIZE)
-      const response = await axios.get(`${API_URL}/leads?${p.toString()}`)
+      const response = await api.get(`/leads?${p.toString()}`)
       setLeads(response.data.leads || [])
       setTotal(response.data.total || 0)
       setFunnel(response.data.funnel || null)
@@ -91,11 +89,24 @@ function LeadsPanel() {
     setPage(0)
   }
 
-  const exportCsv = () => {
+  const [exporting, setExporting] = useState(false)
+
+  const exportCsv = async () => {
     // Экспорт использует тот же фильтр, что и таблица: превью и файл
-    // должны совпадать по составу записей. Сервер отдаёт
-    // Content-Disposition: attachment, поэтому браузер скачивает файл.
-    window.location.href = `${API_URL}/leads/export?${buildQuery().toString()}`
+    // должны совпадать по составу записей.
+    //
+    // Переходом по ссылке здесь не обойтись: вместе с навигацией браузер не
+    // передаёт заголовок Authorization, и backend ответил бы 401 вместо файла.
+    setExporting(true)
+    setError('')
+    try {
+      await downloadLeadsExport(buildQuery().toString())
+    } catch (err) {
+      console.error('Ошибка выгрузки CSV:', err)
+      setError('Не удалось выгрузить CSV')
+    } finally {
+      setExporting(false)
+    }
   }
 
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE))
@@ -140,7 +151,7 @@ function LeadsPanel() {
           </h2>
           <button
             onClick={exportCsv}
-            disabled={loading || total === 0}
+            disabled={loading || total === 0 || exporting}
             className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <Download className="w-4 h-4" />

@@ -1,10 +1,9 @@
 import React, { useState, useEffect } from 'react'
-import axios from 'axios'
-import { Settings, History, Save, RefreshCw, AlertCircle, CheckCircle2, KeyRound } from 'lucide-react'
+import { Save, Undo2, Clock, Loader2, CheckCircle2, AlertCircle } from 'lucide-react'
+import api from '../api.js'
 
-// Относительный путь: в проде /admin проксирует nginx контейнера (nginx.conf),
-// в dev — vite proxy (vite.config.js). VITE_API_URL переопределяет на другой домен.
-const API_URL = `${import.meta.env.VITE_API_URL ?? ''}/admin`
+// В dev — vite proxy (vite.config.js). VITE_API_URL переопределяет на другой
+// домен; по умолчанию относительный путь, и nginx контейнера проксирует сам.
 
 function AdminPanel() {
   // W, Price, ShopID — редактируемые значения.
@@ -31,7 +30,7 @@ function AdminPanel() {
   const loadParams = async () => {
     try {
       setLoading(true)
-      const response = await axios.get(`${API_URL}/params`)
+      const response = await api.get('/params')
       const loaded = {
         W: response.data.W || '',
         Price: response.data.Price || '',
@@ -56,7 +55,7 @@ function AdminPanel() {
   // Загрузка истории снимков конфигурации
   const loadSnapshots = async () => {
     try {
-      const response = await axios.get(`${API_URL}/params/history/snapshot?limit=50`)
+      const response = await api.get('/params/history/snapshot?limit=50')
       setSnapshots(response.data.history || [])
     } catch (error) {
       console.error('Ошибка загрузки истории снимков:', error)
@@ -111,7 +110,7 @@ function AdminPanel() {
       // W
       if (params.W !== initial.W) {
         try {
-          await axios.post(`${API_URL}/params/W`, { value: String(params.W) })
+          await api.post('/params/W', { value: String(params.W) })
           savedAnything = true
         } catch (e) {
           errors.push(e.response?.data?.detail || 'Ошибка сохранения W')
@@ -121,7 +120,7 @@ function AdminPanel() {
       // Price
       if (params.Price !== initial.Price) {
         try {
-          await axios.post(`${API_URL}/params/Price`, { value: String(params.Price) })
+          await api.post('/params/Price', { value: String(params.Price) })
           savedAnything = true
         } catch (e) {
           errors.push(e.response?.data?.detail || 'Ошибка сохранения Price')
@@ -137,7 +136,7 @@ function AdminPanel() {
           errors.push('Shop ID не может быть пустым')
         } else {
           try {
-            await axios.post(`${API_URL}/params/yookassa`, {
+            await api.post('/params/yookassa', {
               shop_id: params.ShopID.trim(),
               api_key: keyEntered ? apiKeyInput.trim() : undefined
             })
@@ -151,7 +150,7 @@ function AdminPanel() {
       // Фиксируем полный снимок конфигурации (пресет для истории).
       if (savedAnything) {
         try {
-          await axios.post(`${API_URL}/params/snapshot`)
+          await api.post('/params/snapshot')
         } catch (e) {
           errors.push(e.response?.data?.detail || 'Ошибка сохранения снимка')
         }
