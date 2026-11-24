@@ -79,6 +79,13 @@ class ParamsService:
             # Если оба параметра были инициализированы, добавляем в совместную историю
             if (not existing_shop_id and shop_id_value) or (not existing_ykassa_api and ykassa_api_value):
                 await self._add_yookassa_history(shop_id_value or existing_shop_id, ykassa_api_value or existing_ykassa_api, "initialized_from_env")
+
+            # Стартовый снимок конфигурации: нужен, чтобы история пресетов
+            # не была пустой до первого сохранения через админ-панель.
+            # Создаётся только если снимков ещё нет — иначе при каждом рестарте
+            # контейнера в истории копился бы дубль.
+            if not await redis.lrange("params:history:snapshot", 0, 0):
+                await self.add_snapshot_history(source="initialized_from_env")
         except Exception as e:
             # Если Redis недоступен, просто логируем ошибку, но не падаем
             print(f"[ParamsService] Warning: Could not initialize params in Redis: {e}")
@@ -117,6 +124,61 @@ class ParamsService:
             await redis.ltrim(history_key, 0, 99)
         except Exception as e:
             print(f"[ParamsService] Warning: Could not add YooKassa history: {e}")
+
+    async def add_snapshot_history(self, source: str = "manual") -> bool:
+        """
+        Сохранить ПОЛНЫЙ снимок конфигурации (W, Price, ShopID, маска ключа).
+
+        Снимки — это готовые пресеты: в админке один блок истории содержит
+        все параметры сразу, клик по нему возвращает конфигурацию в форму,
+        а «Сохранить» применяет её разом. Отдельные истории по параметрам
+        для этого не пригодны — их нельзя применить как целостный набор.
+        Реальный API-ключ в снимок НЕ попадает (только маска).
+        """
+        try:
+            redis = await self._get_redis()
+            w = await redis.get("W")
+            price = await redis.get("Price")
+            shop_id = await redis.get("ShopID")
+            api_key = await redis.get("Ykassa_API")
+
+            entry = {
+                "W": w,
+                "Price": price,
+                "shop_id": shop_id,
+                "api_key": mask_secret(api_key),
+                "has_api_key": bool(api_key),
+                "timestamp": datetime.now().isoformat(),
+                "source": source,
+            }
+            history_key = "params:history:snapshot"
+            await redis.lpush(history_key, json.dumps(entry))
+            await redis.ltrim(history_key, 0, 99)
+            return True
+        except Exception as e:
+            print(f"[ParamsService] Warning: Could not add snapshot history: {e}")
+            return False
+
+    async def get_snapshot_history(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """Получить историю снимков конфигурации (ключ уже замаскирован при записи)."""
+        try:
+            redis = await self._get_redis()
+            entries = await redis.lrange("params:history:snapshot", 0, limit - 1)
+            result = []
+            for entry_json in entries:
+                try:
+                    entry = json.loads(entry_json)
+                except json.JSONDecodeError:
+                    continue
+                # Идемпотентная маскировка на случай старых незаписанных значений.
+                if "api_key" in entry:
+                    entry["api_key"] = mask_secret(entry["api_key"])
+                entry.setdefault("has_api_key", bool(entry.get("api_key")))
+                result.append(entry)
+            return result
+        except Exception as e:
+            print(f"[ParamsService] Error getting snapshot history: {e}")
+            return []
     
     async def get_param(self, param_name: str) -> Optional[str]:
         """Получить текущее значение параметра."""

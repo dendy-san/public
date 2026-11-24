@@ -65,6 +65,21 @@ async def update_yookassa_params(request: YooKassaParamsUpdateRequest) -> Dict[s
     }
 
 
+@router.post("/params/snapshot")
+async def save_snapshot() -> Dict[str, Any]:
+    """
+    Сохранить полный снимок текущей конфигурации (W, Price, ShopID, маска ключа).
+
+    Вызывается админ-панелью один раз после применения изменений: снимок —
+    это пресет, которым можно позже вернуть всю конфигурацию целиком.
+    Объявлен до маршрута /params/{param_name}, чтобы не считаться параметром.
+    """
+    success = await params_service.add_snapshot_history(source="admin_panel")
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to save configuration snapshot")
+    return {"status": "ok", "message": "Configuration snapshot saved"}
+
+
 @router.get("/params/{param_name}")
 async def get_param(param_name: str) -> Dict[str, Any]:
     """Получить текущее значение параметра (секрет маскируется)."""
@@ -129,6 +144,15 @@ async def get_param_history(
 ) -> Dict[str, Any]:
     """Получить историю изменений параметра."""
     param_name_lower = param_name.lower()
+
+    # Снимки полной конфигурации (пресеты для админ-панели)
+    if param_name_lower == "snapshot":
+        snapshots = await params_service.get_snapshot_history(limit=limit)
+        return {
+            "param_name": "snapshot",
+            "history": snapshots,
+            "count": len(snapshots),
+        }
 
     # История параметров ЮКассы (ShopID и Ykassa_API вместе)
     if param_name_lower in ["yookassa", "shopid", "ykassa_api"]:

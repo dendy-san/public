@@ -16,16 +16,18 @@ function AdminPanel() {
   const [hasApiKey, setHasApiKey] = useState(false)
   const [maskedApiKey, setMaskedApiKey] = useState('')
 
-  const [history, setHistory] = useState({ W: [], Price: [], yookassa: [] })
+  // Снимки конфигурации — единый список истории (W + Price + ShopID + маска ключа).
+  // Клик по снимку подставляет его значения в форму; применение — кнопкой «Сохранить».
+  const [snapshots, setSnapshots] = useState([])
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [selectedParam, setSelectedParam] = useState('W')
+  const [selectedSnapshot, setSelectedSnapshot] = useState(null)
   const [message, setMessage] = useState({ type: '', text: '' })
 
   // Снимок загруженных значений, чтобы отправлять только реально изменённые поля
   const [initial, setInitial] = useState({ W: '', Price: '', ShopID: '' })
 
-  // Загрузка параметров
+  // Загрузка текущих параметров
   const loadParams = async () => {
     try {
       setLoading(true)
@@ -41,6 +43,7 @@ function AdminPanel() {
       setMaskedApiKey(response.data.Ykassa_API || '')
       // Поле ввода ключа всегда остаётся пустым (см. комментарий выше)
       setApiKeyInput('')
+      setSelectedSnapshot(null)
       setMessage({ type: 'success', text: 'Параметры загружены' })
     } catch (error) {
       console.error('Ошибка загрузки параметров:', error)
@@ -50,17 +53,13 @@ function AdminPanel() {
     }
   }
 
-  // Загрузка истории параметра
-  const loadHistory = async (paramName) => {
+  // Загрузка истории снимков конфигурации
+  const loadSnapshots = async () => {
     try {
-      const response = await axios.get(`${API_URL}/params/history/${paramName}?limit=50`)
-      if (paramName === 'yookassa') {
-        setHistory(prev => ({ ...prev, yookassa: response.data.history || [] }))
-      } else {
-        setHistory(prev => ({ ...prev, [paramName]: response.data.history || [] }))
-      }
+      const response = await axios.get(`${API_URL}/params/history/snapshot?limit=50`)
+      setSnapshots(response.data.history || [])
     } catch (error) {
-      console.error(`Ошибка загрузки истории для ${paramName}:`, error)
+      console.error('Ошибка загрузки истории снимков:', error)
     }
   }
 
@@ -71,7 +70,26 @@ function AdminPanel() {
     return Number.isInteger(n) && n > 0
   }
 
-  // Единственная кнопка сохранения: отправляем только изменённые поля
+  // Подставить снимок в форму (без записи на сервер).
+  // Реальный API-ключ восстановить из снимка нельзя (хранится только маска),
+  // поэтому поле ключа остаётся пустым = текущий ключ не меняется.
+  const applySnapshot = (snap, index) => {
+    const next = {
+      W: snap.W != null ? String(snap.W) : '',
+      Price: snap.Price != null ? String(snap.Price) : '',
+      ShopID: snap.shop_id || '',
+    }
+    setParams(next)
+    setApiKeyInput('')
+    setSelectedSnapshot(index)
+    setMessage({
+      type: 'success',
+      text: 'Снимок подставлен в форму. Проверьте значения и нажмите «Сохранить изменения».',
+    })
+  }
+
+  // Единственная кнопка сохранения: отправляем только изменённые поля,
+  // затем фиксируем полный снимок конфигурации в истории.
   const saveAll = async () => {
     setMessage({ type: '', text: '' })
 
@@ -129,6 +147,15 @@ function AdminPanel() {
           }
         }
       }
+
+      // Фиксируем полный снимок конфигурации (пресет для истории).
+      if (savedAnything) {
+        try {
+          await axios.post(`${API_URL}/params/snapshot`)
+        } catch (e) {
+          errors.push(e.response?.data?.detail || 'Ошибка сохранения снимка')
+        }
+      }
     } finally {
       setSaving(false)
     }
@@ -144,25 +171,17 @@ function AdminPanel() {
     }
 
     setMessage({ type: 'success', text: 'Изменения сохранены' })
-    // Перезагружаем значения и историю, чтобы снять изменённый флаг
+    // Перезагружаем значения и снимки, чтобы снять флаг изменений
     await loadParams()
-    await Promise.all([loadHistory('W'), loadHistory('Price'), loadHistory('yookassa')])
+    await loadSnapshots()
     setTimeout(() => setMessage({ type: '', text: '' }), 4000)
   }
 
   // Загрузка при монтировании
   useEffect(() => {
     loadParams()
-    loadHistory('W')
-    loadHistory('Price')
-    loadHistory('yookassa')
+    loadSnapshots()
   }, [])
-
-  const paramLabels = {
-    W: 'W (длительность сеанса в минутах)',
-    Price: 'Price (цена в рублях)',
-    ShopID: 'Shop ID (код магазина ЮКассы)',
-  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-6">
@@ -173,7 +192,7 @@ function AdminPanel() {
             <Settings className="w-8 h-8 text-indigo-600" />
             Панель управления параметрами
           </h1>
-          <p className="text-gray-600 mt-2">Управление системными параметрами и просмотр истории изменений</p>
+          <p className="text-gray-600 mt-2">Управление системными параметрами и история конфигураций</p>
         </div>
 
         {/* Сообщения */}
@@ -205,7 +224,7 @@ function AdminPanel() {
                 onClick={loadParams}
                 disabled={loading}
                 className="p-2 text-gray-600 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors disabled:opacity-50"
-                title="Обновить параметры"
+                title="Обновить параметры с сервера"
               >
                 <RefreshCw className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} />
               </button>
@@ -215,7 +234,7 @@ function AdminPanel() {
               {/* Параметр W */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  {paramLabels.W}
+                  W (длительность сеанса в минутах)
                 </label>
                 <input
                   type="number"
@@ -230,7 +249,7 @@ function AdminPanel() {
               {/* Параметр Price */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  {paramLabels.Price}
+                  Price (цена в рублях)
                 </label>
                 <input
                   type="number"
@@ -245,7 +264,7 @@ function AdminPanel() {
               {/* Параметры ЮКассы - Shop ID */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  {paramLabels.ShopID}
+                  Shop ID (код магазина ЮКассы)
                 </label>
                 <input
                   type="text"
@@ -300,89 +319,75 @@ function AdminPanel() {
             </div>
           </div>
 
-          {/* Правая колонка: История изменений */}
+          {/* Правая колонка: История конфигураций (снимки) */}
           <div className="bg-white rounded-xl shadow-lg p-6">
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-xl font-semibold text-gray-800 flex items-center gap-2">
                 <History className="w-5 h-5 text-indigo-600" />
                 История изменений
               </h2>
+              <button
+                onClick={loadSnapshots}
+                disabled={loading}
+                className="p-2 text-gray-600 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors disabled:opacity-50"
+                title="Обновить историю"
+              >
+                <RefreshCw className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} />
+              </button>
             </div>
 
-            {/* Переключатель параметров */}
-            <div className="mb-4 flex gap-2 border-b border-gray-200">
-              {['W', 'Price', 'yookassa'].map((key) => (
-                <button
-                  key={key}
-                  onClick={() => setSelectedParam(key)}
-                  className={`px-4 py-2 font-medium transition-colors ${
-                    selectedParam === key
-                      ? 'text-indigo-600 border-b-2 border-indigo-600'
-                      : 'text-gray-600 hover:text-gray-800'
-                  }`}
-                >
-                  {key === 'yookassa' ? 'ЮКасса' : key}
-                </button>
-              ))}
-            </div>
+            <p className="text-sm text-gray-500 mb-4">
+              Нажмите на конфигурацию, чтобы подставить её в форму, затем сохраните.
+            </p>
 
-            {/* Список истории */}
-            <div className="space-y-3 max-h-[500px] overflow-y-auto">
-              {selectedParam === 'yookassa' ? (
-                // История параметров ЮКассы
-                history.yookassa && history.yookassa.length > 0 ? (
-                  history.yookassa.map((entry, index) => (
-                    <div
-                      key={index}
-                      className="p-4 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
-                    >
-                      <div className="flex justify-between items-start mb-2">
-                        <div className="flex-1">
-                          <div className="font-medium text-gray-800 mb-1">
-                            Shop ID: <span className="text-indigo-600">{entry.shop_id}</span>
-                          </div>
-                          <div className="font-medium text-gray-800">
-                            API Key: <span className="text-indigo-600 font-mono text-sm">{entry.api_key}</span>
-                          </div>
+            {/* Список снимков */}
+            <div className="space-y-3 max-h-[560px] overflow-y-auto pr-1">
+              {snapshots.length > 0 ? (
+                snapshots.map((entry, index) => (
+                  <button
+                    key={index}
+                    type="button"
+                    onClick={() => applySnapshot(entry, index)}
+                    className={`w-full text-left p-4 border rounded-lg transition-colors ${
+                      selectedSnapshot === index
+                        ? 'border-indigo-500 bg-indigo-50 ring-1 ring-indigo-300'
+                        : 'border-gray-200 hover:bg-gray-50'
+                    }`}
+                  >
+                    <div className="flex justify-between items-start gap-4">
+                      <div className="flex-1 min-w-0">
+                        <div className="font-medium text-gray-800 mb-1">
+                          Shop ID: <span className="text-indigo-600">{entry.shop_id || '—'}</span>
                         </div>
-                        <span className="text-xs text-gray-500 ml-4">
-                          {new Date(entry.timestamp).toLocaleString('ru-RU')}
-                        </span>
-                      </div>
-                    </div>
-                  ))
-                ) : (
-                  <div className="text-center py-8 text-gray-500">
-                    <History className="w-12 h-12 mx-auto mb-3 opacity-50" />
-                    <p>История изменений параметров ЮКассы пуста</p>
-                    <p className="text-sm mt-1">Изменения появятся здесь после первого обновления параметров</p>
-                  </div>
-                )
-              ) : (
-                // История параметров W или Price
-                history[selectedParam] && history[selectedParam].length > 0 ? (
-                  history[selectedParam].map((entry, index) => (
-                    <div
-                      key={index}
-                      className="p-4 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
-                    >
-                      <div className="flex justify-between items-start mb-2">
                         <div className="font-medium text-gray-800">
-                          Значение: <span className="text-indigo-600">{entry.value}</span>
+                          API Key:
+                          <span className="text-indigo-600 font-mono text-sm break-all">
+                            {entry.api_key || '—'}
+                          </span>
                         </div>
-                        <span className="text-xs text-gray-500">
+                      </div>
+                      <div className="text-right shrink-0">
+                        <div className="text-xs text-gray-500 mb-2">
                           {new Date(entry.timestamp).toLocaleString('ru-RU')}
-                        </span>
+                        </div>
+                        <div className="flex items-center justify-end gap-3 text-gray-600">
+                          <span>W</span>
+                          <span className="font-bold text-gray-900 w-12 text-right">{entry.W ?? '—'}</span>
+                        </div>
+                        <div className="flex items-center justify-end gap-3 text-gray-600">
+                          <span>Price</span>
+                          <span className="font-bold text-gray-900 w-12 text-right">{entry.Price ?? '—'}</span>
+                        </div>
                       </div>
                     </div>
-                  ))
-                ) : (
-                  <div className="text-center py-8 text-gray-500">
-                    <History className="w-12 h-12 mx-auto mb-3 opacity-50" />
-                    <p>История изменений пуста</p>
-                    <p className="text-sm mt-1">Изменения появятся здесь после первого обновления параметра</p>
-                  </div>
-                )
+                  </button>
+                ))
+              ) : (
+                <div className="text-center py-8 text-gray-500">
+                  <History className="w-12 h-12 mx-auto mb-3 opacity-50" />
+                  <p>История конфигураций пуста</p>
+                  <p className="text-sm mt-1">Снимки появятся здесь после первого сохранения параметров</p>
+                </div>
               )}
             </div>
           </div>
