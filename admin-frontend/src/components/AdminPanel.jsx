@@ -220,11 +220,17 @@ function AdminPanel() {
                 <Settings className="w-5 h-5 text-indigo-600" />
                 Редактирование параметров
               </h2>
+              {/*
+                Единственная стрелка: возвращает в форму значения, реально
+                лежащие на сервере, то есть отменяет незаписанные правки.
+                При открытии страницы и после сохранения данные и так
+                актуальны, поэтому отдельная кнопка обновления истории не нужна.
+              */}
               <button
                 onClick={loadParams}
                 disabled={loading}
                 className="p-2 text-gray-600 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors disabled:opacity-50"
-                title="Обновить параметры с сервера"
+                title="Отменить правки: подставить значения, сохранённые на сервере"
               >
                 <RefreshCw className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} />
               </button>
@@ -321,19 +327,11 @@ function AdminPanel() {
 
           {/* Правая колонка: История конфигураций (снимки) */}
           <div className="bg-white rounded-xl shadow-lg p-6">
-            <div className="flex items-center justify-between mb-6">
+            <div className="mb-6">
               <h2 className="text-xl font-semibold text-gray-800 flex items-center gap-2">
                 <History className="w-5 h-5 text-indigo-600" />
                 История изменений
               </h2>
-              <button
-                onClick={loadSnapshots}
-                disabled={loading}
-                className="p-2 text-gray-600 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors disabled:opacity-50"
-                title="Обновить историю"
-              >
-                <RefreshCw className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} />
-              </button>
             </div>
 
             <p className="text-sm text-gray-500 mb-4">
