@@ -11,7 +11,11 @@ worker_class = "uvicorn.workers.UvicornWorker"
 threads = 1
 
 # Таймауты
-timeout = 90  # Максимальное время обработки запроса
+# Синхронный анализ сайта (analyze-site-sync) обращается к LLM и может
+# длиться минуты. Gunicorn убивает воркер по timeout, поэтому он должен быть
+# НЕ МЕНЬШЕ клиентского (axios 300с) и nginx (proxy_read_timeout 300с),
+# иначе длинная генерация прерывается с 502. Было 90с — это роняло воркер.
+timeout = 300
 keepalive = 15  # Keep-alive соединения
 graceful_timeout = 60  # Время на graceful shutdown
 

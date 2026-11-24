@@ -27,7 +27,12 @@ function App() {
   const [occasionLocked, setOccasionLocked] = useState(false) // Инфоповод заблокирован после первой генерации
   const [sessionEndModal, setSessionEndModal] = useState(null) // Модальное окно завершения сеанса (блоки 22/23)
 
-  const backendUrl = 'http://localhost:8000'
+  // Пустая строка = относительные пути (/llm, /payment, ...): в проде их
+  // проксирует nginx контейнера фронтенда (см. frontend/nginx.conf), в dev —
+  // vite proxy (см. vite.config.js). Так фронт не зависит от хоста/порта
+  // бэкенда и не требует открытия 8000 наружу. VITE_API_URL позволяет
+  // переопределить на абсолютный адрес, если API вынесен на другой домен.
+  const backendUrl = import.meta.env.VITE_API_URL ?? ''
 
   // Загружаем доступные стили при изменении сеанса
   useEffect(() => {

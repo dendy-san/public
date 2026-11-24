@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,6 +10,25 @@ from app.routers.session import router as session_router
 from app.routers.admin import router as admin_router
 from app.models.database import init_db
 from app.services.params_service import params_service
+from app.services import rate_limit
+
+
+def _parse_cors_origins() -> list:
+    """
+    Разрешённые origins берутся из env CORS_ALLOWED_ORIGINS (список через
+    запятую). Wildcard "*" больше не используется: он разрешал запросы с
+    любого сайта. Если env не задан, дефолт — локальные адреса для приёмки
+    в браузере; в production необходимо указать боевой домен, иначе браузер
+    с чужого origin получит отказ (fail closed).
+    """
+    raw = os.getenv("CORS_ALLOWED_ORIGINS", "").strip()
+    if raw:
+        return [o.strip() for o in raw.split(",") if o.strip()]
+    return [
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "http://localhost:5173",
+    ]
 
 
 @asynccontextmanager
@@ -21,6 +41,7 @@ async def lifespan(app: FastAPI):
     yield
     # Закрытие подключения к Redis при остановке приложения
     await params_service.close()
+    await rate_limit.close()
 
 
 def create_app() -> FastAPI:
@@ -29,10 +50,10 @@ def create_app() -> FastAPI:
     # Настройка CORS - должен быть первым middleware
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],  # Разрешаем все origins для тестирования
+        allow_origins=_parse_cors_origins(),  # конкретные origins вместо "*"
         allow_credentials=False,
-        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        allow_headers=["*"],
+        allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+        allow_headers=["Content-Type"],
     )
 
     # Простой тестовый эндпоинт

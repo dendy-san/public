@@ -4,7 +4,7 @@ import { Mail, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react'
 import axios from 'axios'
 import { STYLE_COUNT } from './styles'
 
-const EmailCheck = ({ onSessionValid, backendUrl = 'http://localhost:8000' }) => {
+const EmailCheck = ({ onSessionValid, backendUrl = import.meta.env.VITE_API_URL ?? '' }) => {
   const [email, setEmail] = useState('')
   const [isChecking, setIsChecking] = useState(false)
   const [error, setError] = useState(null)

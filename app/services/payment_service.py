@@ -140,16 +140,31 @@ class YooKassaPaymentService:
             response.raise_for_status()
             return response.json()
 
+    async def check_amount(self, amount: Optional[int]) -> bool:
+        """
+        Сверяет сумму платежа с актуальным Price из Redis.
+        Предотвращает создание сеанса при поддельном webhook (например, 1 ₽).
+        """
+        if amount is None:
+            return False
+        expected_price = await self._get_price()
+        return amount == expected_price
+
     def verify_webhook(self, webhook_data: Dict[str, Any]) -> bool:
         """
-        Проверка webhook от ЮКассы (базовая проверка).
-        В production нужно добавить проверку подписи.
+        Базовая структурная проверка уведомления от ЮКассы.
+
+        ВАЖНО: содержимому webhook мы НЕ доверяем — его может отправить
+        кто угодно. Здесь проверяется только наличие минимальной структуры,
+        чтобы не слать бессмысленный запрос в API. Настоящая проверка —
+        эхо-верификация: роутер извлекает object.id и запрашивает реальный
+        платёж через get_payment_status (Basic-auth к API ЮКассы). Если
+        платёж не найден или его реальный статус/сумма не совпали — сеанс
+        не создаётся. Whitelist IP ЮКассы настраивается на уровне реверс-прокси.
         """
-        # Базовая проверка структуры
         return (
-            "event" in webhook_data and
-            "object" in webhook_data and
-            webhook_data.get("object", {}).get("metadata", {}).get("email")
+            webhook_data.get("event") is not None
+            and webhook_data.get("object", {}).get("id") is not None
         )
 
     def extract_email_from_payment(self, payment_data: Dict[str, Any]) -> Optional[str]:

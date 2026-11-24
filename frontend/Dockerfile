@@ -23,8 +23,8 @@ FROM nginx:alpine
 # Копирование собранного приложения из builder
 COPY --from=builder /app/dist /usr/share/nginx/html
 
-# Копирование конфигурации nginx (если нужна)
-# COPY nginx.conf /etc/nginx/conf.d/default.conf
+# Копирование конфигурации nginx (reverse-proxy API + SPA fallback)
+COPY nginx.conf /etc/nginx/conf.d/default.conf
 
 # Открытие порта
 EXPOSE 80

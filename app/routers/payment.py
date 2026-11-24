@@ -86,7 +86,13 @@ async def payment_webhook(
     db: Session = Depends(get_db)
 ):
     """
-    Webhook для обработки уведомлений от ЮКассы о статусе платежа.
+    Webhook от ЮКассы о статусе платежа.
+
+    Безопасность (Этап 3): содержимому уведомления НЕ доверяем — его может
+    отправить любой, кто знает URL. Доверие только данным, полученным НАМИ
+    из API ЮКассы по Basic-auth (эхо-верификация). Из тела webhook берётся
+    лишь payment_id, дальше платёж перезапрашивается, и сеанс создаётся только
+    если реальный статус == succeeded и сумма совпадает с актуальным Price.
     """
     if not payment_service:
         raise HTTPException(
@@ -95,40 +101,62 @@ async def payment_webhook(
         )
 
     try:
-        # Проверяем webhook
+        # 1. Минимальная структурная проверка (не доверие содержимому).
         if not payment_service.verify_webhook(webhook_data):
             raise HTTPException(status_code=400, detail="Невалидный webhook")
 
         event = webhook_data.get("event")
         payment_object = webhook_data.get("object", {})
+        payment_id = payment_object.get("id")
 
-        # Обрабатываем только успешные платежи
-        if event == "payment.succeeded":
-            payment_id = payment_object.get("id")
-            email = payment_service.extract_email_from_payment(payment_object)
-            # Получаем сумму оплаты из объекта платежа (целочисленные рубли)
-            amount_object = payment_object.get("amount", {})
-            amount = int(float(amount_object.get("value", 0))) if amount_object else None
-            # Получаем продолжительность сеанса (W) из метаданных платежа
-            duration_minutes_str = payment_object.get("metadata", {}).get("duration_minutes")
-            duration_minutes = int(duration_minutes_str) if duration_minutes_str else None
+        # Обрабатываем только успешные; всё равно перезапросим платёж.
+        if event != "payment.succeeded" or not payment_id:
+            return {"status": "ok", "message": "Webhook обработан"}
 
-            if email and payment_id:
-                # Получаем актуальное значение W из Redis для создания сеанса
-                if duration_minutes is None:
-                    w_value = await params_service.get_param("W")
-                    import os
-                    if w_value:
-                        duration_minutes = int(w_value)
-                    else:
-                        duration_minutes = int(os.getenv("W", os.getenv("SESSION_DURATION_MINUTES", "1440")))
-                
-                # Создаем или обновляем сеанс клиента с актуальными параметрами из Redis
-                session_service.create_session(db, email, payment_id=payment_id, amount=amount, duration_minutes=duration_minutes)
-                return {"status": "ok", "message": "Сеанс создан"}
+        # 2. ЭХО-ВЕРИФИКАЦИЯ: запрашиваем реальный платёж из API ЮКассы.
+        try:
+            payment_data = await payment_service.get_payment_status(payment_id)
+        except Exception:
+            # Платёж не найден или API недоступен — сеанс НЕ создаём.
+            raise HTTPException(status_code=400, detail="Платёж не подтверждён")
 
-        return {"status": "ok", "message": "Webhook обработан"}
+        # 3. Реальный статус берём из ответа API, а не из тела webhook.
+        if payment_data.get("status") != "succeeded":
+            return {"status": "ok", "message": "Платёж не оплачен"}
 
+        # 4. Email, сумма и W — из данных API (metadata ставили сами при создании).
+        email = payment_service.extract_email_from_payment(payment_data)
+        if not email:
+            raise HTTPException(status_code=400, detail="В платеже нет email")
+
+        amount_object = payment_data.get("amount", {})
+        amount = int(float(amount_object.get("value", 0))) if amount_object else None
+
+        # 5. СВЕРКА СУММЫ с актуальным Price (защита от поддельного webhook на 1 ₽).
+        if not await payment_service.check_amount(amount):
+            raise HTTPException(
+                status_code=400,
+                detail="Сумма платежа не совпадает с актуальной ценой"
+            )
+
+        # 6. Длительность сеанса: из metadata, иначе актуальный W из Redis.
+        duration_minutes_str = payment_data.get("metadata", {}).get("duration_minutes")
+        duration_minutes = int(duration_minutes_str) if duration_minutes_str else None
+        if duration_minutes is None:
+            import os
+            w_value = await params_service.get_param("W")
+            duration_minutes = int(w_value) if w_value else int(
+                os.getenv("W", os.getenv("SESSION_DURATION_MINUTES", "1440"))
+            )
+
+        session_service.create_session(
+            db, email, payment_id=payment_id,
+            amount=amount, duration_minutes=duration_minutes
+        )
+        return {"status": "ok", "message": "Сеанс создан"}
+
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=500,

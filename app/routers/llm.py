@@ -1,7 +1,7 @@
 from typing import Any, Dict, List, Optional
 import httpx
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 
@@ -9,7 +9,33 @@ from app.services.llm_client import LLMClient
 from app.services.analyzer import SiteAnalyzer
 from app.models.database import get_db
 from app.services.session_service import session_service
+from app.services import rate_limit
 from app.styles import DEFAULT_STYLE
+
+
+# Лимиты на ресурсоёмкую генерацию (через LLM): 12 запросов / 60 сек на клиента.
+ANALYZE_LIMIT = 12
+ANALYZE_WINDOW_SECONDS = 60
+
+
+async def check_analyze_rate_limit(request: Request) -> None:
+    """
+    Зависимость: ограничивает частоту обращений к генерации.
+    Ключ — email из тела запроса + IP клиента (берём X-Forwarded-For, т.к.
+    за реверс-прокси request.client.host — это адрес прокси).
+    """
+    body = await request.json()
+    email = body.get("email", "") if isinstance(body, dict) else ""
+    forwarded = request.headers.get("x-forwarded-for", "")
+    client_ip = forwarded.split(",")[0].strip() if forwarded else (
+        request.client.host if request.client else "unknown"
+    )
+    identity = f"{email}:{client_ip}"
+    if await rate_limit.is_limited("analyze", identity, ANALYZE_LIMIT, ANALYZE_WINDOW_SECONDS):
+        raise HTTPException(
+            status_code=429,
+            detail="Слишком много запросов. Подождите минуту и повторите."
+        )
 
 
 router = APIRouter()
@@ -111,7 +137,8 @@ class AnalyzeRequest(BaseModel):
 @router.post("/analyze-site")
 async def analyze_site(
     request: AnalyzeRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _rate_limited: None = Depends(check_analyze_rate_limit),
 ) -> Dict[str, Any]:
     """Анализ сайта с проверкой сеанса."""
     # Проверяем сеанс клиента
@@ -183,7 +210,8 @@ async def analyze_site(
 @router.post("/analyze-site-sync")
 async def analyze_site_sync(
     request: AnalyzeRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _rate_limited: None = Depends(check_analyze_rate_limit),
 ) -> Dict[str, Any]:
     """
     Синхронный анализ сайта - используется frontend для прямого получения результатов.

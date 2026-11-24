@@ -3,7 +3,7 @@ import { motion } from 'framer-motion'
 import { CreditCard, Loader2, ExternalLink, CheckCircle2, AlertCircle, X } from 'lucide-react'
 import axios from 'axios'
 
-const PaymentForm = ({ email, onPaymentSuccess, onClose, backendUrl = 'http://localhost:8000' }) => {
+const PaymentForm = ({ email, onPaymentSuccess, onClose, backendUrl = import.meta.env.VITE_API_URL ?? '' }) => {
   // Сумма не редактируется - берется из Redis на бэкенде
   const [price, setPrice] = useState(null) // Сумма из Redis (Price)
   const [durationMinutes, setDurationMinutes] = useState(null) // Продолжительность в минутах из Redis (W)
