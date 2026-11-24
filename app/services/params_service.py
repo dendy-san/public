@@ -9,6 +9,20 @@ from typing import Optional, Dict, List, Any
 import redis.asyncio as redis
 
 
+def mask_secret(value: Optional[str]) -> str:
+    """
+    Маскирует секрет, оставляя только последние 4 символа.
+    Идемпотентно: повторное применение к уже замаскированной строке даёт тот же
+    результат (длина и хвост сохраняются), поэтому безопасно применять и при
+    записи, и при отдаче истории со старыми (незамаскированными) записями.
+    """
+    if not value:
+        return ""
+    if len(value) <= 4:
+        return "*" * len(value)
+    return "*" * (len(value) - 4) + value[-4:]
+
+
 class ParamsService:
     """Сервис управления параметрами W (длительность сеанса) и Price (цена)."""
 
@@ -93,7 +107,9 @@ class ParamsService:
             history_key = "params:history:yookassa"
             entry = {
                 "shop_id": shop_id,
-                "api_key": api_key,
+                # В историю пишется только маска: реальный ключ не должен
+                # попадать в список, который отдаётся на фронтенд.
+                "api_key": mask_secret(api_key),
                 "timestamp": datetime.now().isoformat(),
                 "source": source
             }
@@ -122,13 +138,28 @@ class ParamsService:
             print(f"[ParamsService] Error setting param {param_name}: {e}")
             return False
     
-    async def set_yookassa_params(self, shop_id: str, api_key: str, source: str = "manual") -> bool:
-        """Установить оба параметра ЮКассы одновременно и добавить в совместную историю."""
+    async def set_yookassa_params(self, shop_id: str, api_key: Optional[str] = None, source: str = "manual") -> bool:
+        """
+        Обновить параметры ЮКассы и добавить запись в совместную историю.
+
+        api_key опционален: если он не передан (None или пустая строка),
+        сохранённый ключ остаётся неизменным. Это нужно потому, что
+        реальный ключ не отдаётся на фронтенд (см. get_all_params), и при
+        сохранении ShopID поле ключа приходит пустым — перезаписывать им
+        секрет нельзя.
+        """
         try:
             redis = await self._get_redis()
             await redis.set("ShopID", shop_id)
-            await redis.set("Ykassa_API", api_key)
-            await self._add_yookassa_history(shop_id, api_key, source)
+
+            if api_key:
+                await redis.set("Ykassa_API", api_key)
+                effective_key = api_key
+            else:
+                effective_key = await redis.get("Ykassa_API") or ""
+
+            # В историю попадёт только маска (см. _add_yookassa_history)
+            await self._add_yookassa_history(shop_id, effective_key, source)
             return True
         except Exception as e:
             print(f"[ParamsService] Error setting YooKassa params: {e}")
@@ -154,30 +185,37 @@ class ParamsService:
             return []
     
     async def get_all_params(self) -> Dict[str, str]:
-        """Получить все текущие параметры."""
+        """
+        Получить текущие параметры для админ-панели.
+
+        ВАЖНО: Ykassa_API возвращается маскированным и никогда не отдаётся
+        целиком — реальный ключ не покидает бэкенд. Флаг has_api_key
+        сообщает интерфейсу, задан ли ключ вообще, чтобы поле не заполнялось
+        значением и не отправлялось обратно при сохранении.
+        """
         try:
             redis = await self._get_redis()
             w = await redis.get("W") or os.getenv("W", "1440")
             price = await redis.get("Price") or os.getenv("Price", "1000")
             shop_id = await redis.get("ShopID") or os.getenv("ShopID", "")
             ykassa_api = await redis.get("Ykassa_API") or os.getenv("Ykassa_API", "")
-            return {
-                "W": w,
-                "Price": price,
-                "ShopID": shop_id,
-                "Ykassa_API": ykassa_api
-            }
         except Exception as e:
             print(f"[ParamsService] Error getting all params: {e}")
-            return {
-                "W": os.getenv("W", "1440"),
-                "Price": os.getenv("Price", "1000"),
-                "ShopID": os.getenv("ShopID", ""),
-                "Ykassa_API": os.getenv("Ykassa_API", "")
-            }
-    
+            w = os.getenv("W", "1440")
+            price = os.getenv("Price", "1000")
+            shop_id = os.getenv("ShopID", "")
+            ykassa_api = os.getenv("Ykassa_API", "")
+
+        return {
+            "W": w,
+            "Price": price,
+            "ShopID": shop_id,
+            "Ykassa_API": mask_secret(ykassa_api),
+            "has_api_key": bool(ykassa_api),
+        }
+
     async def get_yookassa_history(self, limit: int = 20) -> List[Dict[str, Any]]:
-        """Получить историю изменений параметров ЮКассы."""
+        """Получить историю изменений параметров ЮКассы (ключ маскируется)."""
         try:
             redis = await self._get_redis()
             history_key = "params:history:yookassa"
@@ -186,6 +224,10 @@ class ParamsService:
             for entry_json in entries:
                 try:
                     entry = json.loads(entry_json)
+                    # mask_secret идемпотентен, поэтому старые записи,
+                    # сохранённые до введения маскировки, тоже закрываются.
+                    if "api_key" in entry:
+                        entry["api_key"] = mask_secret(entry["api_key"])
                     result.append(entry)
                 except json.JSONDecodeError:
                     continue
