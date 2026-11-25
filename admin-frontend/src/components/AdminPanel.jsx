@@ -1,5 +1,12 @@
 import React, { useState, useEffect } from 'react'
-import { Save, Undo2, Clock, Loader2, CheckCircle2, AlertCircle } from 'lucide-react'
+// Settings, RefreshCw, KeyRound и History использовались в разметке, но не
+// были в списке импортов: сборка Vite на это не жалуется (esbuild не
+// проверяет идентификаторы), а в браузере получается ReferenceError и
+// пустой экран сразу после входа в админку.
+import {
+  Save, Undo2, Clock, Loader2, CheckCircle2, AlertCircle,
+  Settings, RefreshCw, KeyRound, History
+} from 'lucide-react'
 import api from '../api.js'
 
 // В dev — vite proxy (vite.config.js). VITE_API_URL переопределяет на другой
