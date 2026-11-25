@@ -94,6 +94,11 @@ jobs:
     runs-on: ubuntu-latest
     needs: build-and-push
     steps:
+      # Checkout обязателен и здесь: job собирает список файлов для scp, а
+      # без клонирования рабочая директория пуста и scp падает на
+      # 'stat local "docker-compose.yml": No such file or directory'.
+      - uses: actions/checkout@v4
+
       - name: Настройка SSH
         run: |
           mkdir -p ~/.ssh
