@@ -1,23 +1,48 @@
-# Production override: Caddy reverse-proxy + порты 80/443 наружу.
+# Production override: готовые образы из GHCR + Caddy reverse-proxy.
 #
-# Использование:
-#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+# Запуск на сервере:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml pull
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-build
+#
+# Почему pull, а не build: на VPS 1.9 ГБ ОЗУ и 2 CPU. Сборка Vite-бандлов
+# требует больше памяти и на таком сервере заканчивается OOM-kill'ом, а
+# вместе с сборкой падает и весь деплой. Поэтому образы собираются в CI
+# (GitHub Actions, 16 ГБ) и складываются в GHCR, а сервер их только скачивает.
+#
+# Флаг --no-build обязателен: в базовом docker-compose.yml секция build
+# остаётся для локальной разработки. Без него compose при неудачном pull
+# попытается собрать образ на сервере.
 #
 # Требования перед запуском:
-#   1. Заполнить REDIS_PASSWORD в .env (обязательно для prod)
-#   2. Заполнить SITE_DOMAIN и ADMIN_DOMAIN в .env
-#   3. DNS A-записи: SITE_DOMAIN и ADMIN_DOMAIN указывают на IP VPS
-#   4. .env содержит все API-ключи (DeepSeek, OpenAI, ЮKassa)
+#   1. .env: REDIS_PASSWORD, ADMIN_TOKEN, SITE_DOMAIN, ADMIN_DOMAIN, ACME_EMAIL
+#            и все API-ключи (DeepSeek, ProxyAPI, ЮKassa)
+#   2. docker login ghcr.io (токен с правом read:packages)
+#   3. DNS-A записи SITE_DOMAIN и ADMIN_DOMAIN указывают на IP сервера,
+#      иначе Caddy не пройдёт проверку Let's Encrypt и не поднимется.
 #
-# Почему два домена, а не /admin/:
-#   Админка собирается Vite с base="/" и ищет ассеты в /assets/. Если
-#   повесить её на путь /admin/, она будет запрашивать /assets/... вместо
-#   /admin/assets/... и получать SPA клиента вместо своих JS. Переделка
-#   base path потребовала бы пересборки образа под конкретный путь, тогда
-#   как поддомен работает с текущей сборкой без изменений.
+# Совпадение имён volume с базовым файлом не случайно: sqlite-data и
+# redis-data объявлены в docker-compose.yml, поэтому база с персональными
+# данными переживает остановку и пересборку prod-стека.
 
 services:
-  # Caddy: reverse-proxy, автоматический TLS, маршрутизация к контейнерам
+  redis:
+    # В prod пароль обязателен: без него Redis открыт любой docker-сети,
+# а на прошлом сервере именно это привело к блокировке от хостера.
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:?REDIS_PASSWORD обязателен в production}
+
+  backend:
+    image: ghcr.io/dendy-san/public-backend:${IMAGE_TAG:-latest}
+    # build из базового файла здесь не используется (см. --no-build выше).
+
+  frontend:
+    image: ghcr.io/dendy-san/public-frontend:${IMAGE_TAG:-latest}
+
+  admin-frontend:
+    image: ghcr.io/dendy-san/public-admin-frontend:${IMAGE_TAG:-latest}
+
+  # Caddy: TLS от Let's Encrypt и маршрутизация по доменам.
+  # Публикует единственные два порта наружу — 80 и 443.
   caddy:
     image: caddy:2-alpine
     container_name: public-caddy
@@ -29,9 +54,10 @@ services:
       - caddy-data:/data
       - caddy-config:/config
     environment:
-      # Caddyfile подставляет их как {env.SITE_DOMAIN} / {env.ADMIN_DOMAIN}
-      - SITE_DOMAIN=${SITE_DOMAIN}
-      - ADMIN_DOMAIN=${ADMIN_DOMAIN}
+      # Caddyfile подставляет их как {$SITE_DOMAIN} / {$ADMIN_DOMAIN}
+      - SITE_DOMAIN=${SITE_DOMAIN:?SITE_DOMAIN обязателен в production}
+      - ADMIN_DOMAIN=${ADMIN_DOMAIN:?ADMIN_DOMAIN обязателен в production}
+      - ACME_EMAIL=${ACME_EMAIL}
     depends_on:
       frontend:
         condition: service_healthy
@@ -44,6 +70,8 @@ services:
       - public-network
 
 volumes:
-  # Данные Caddy: сертификаты Let's Encrypt и кэш
+  # Данные Caddy: сертификаты Let's Encrypt и кэш выпуска ACME.
+  # Без этого volume сертификат выпускается заново при каждом пересоздании
+  # контейнера и упирается в rate limit Let's Encrypt.
   caddy-data:
   caddy-config:

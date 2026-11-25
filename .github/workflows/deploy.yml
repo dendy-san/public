@@ -1,1206 +1,165 @@
 name: Deploy to VPS
 
+# Пайплайн: собрать образы на GitHub Runner → выложить в GHCR → сказать
+# серверу скачать и запустить.
+#
+# Прежняя версия собирала образы прямо на VPS и перед сборкой выполняла
+# git reset --hard, docker system prune -a --volumes и удаление всего из
+# /var/lib/docker. Это ломало деплой двумя способами:
+#   1. Сборка Vite на 1.9 ГБ ОЗУ завершалась OOM-kill'ом.
+#   2. "--volumes" вместе с docker volume prune удалял том с SQLite, то есть
+#      персональные данные клиентов, при каждом проблемном прогоне.
+# Здесь сервер только скачивает готовые образы и ничего не удаляет.
+
 on:
   push:
-    branches:
-      - main
-  workflow_dispatch:  # Ручной запуск из UI GitHub
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  # Два параллельных деплоя на один сервер мешают друг другу: второй
+  # обрывает запущенный compose up. Очередь — по одному за раз.
+  group: deploy-vps
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAMESPACE: dendy-san
+  DEPLOY_DIR: /opt/genpost
 
 jobs:
-  deploy:
-    name: Deploy to VPS
+  build-and-push:
+    name: Собрать и выложить образы
     runs-on: ubuntu-latest
-
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup SSH
-        uses: webfactory/ssh-agent@v0.9.0
+      - name: Метки образов
+        id: meta
+        run: |
+          SHORT=$(git rev-parse --short=7 HEAD)
+          echo "tag=sha-$SHORT" >> "$GITHUB_OUTPUT"
+          echo "Собираем с тегом sha-$SHORT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Вход в GHCR
+        uses: docker/login-action@v3
         with:
-          ssh-private-key: ${{ secrets.VPS_SSH_KEY }}
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Add VPS to known hosts
+      # Каждый образ собирается отдельным шагом: слои кэша (npm ci, pip install)
+      # переиспользуются между прогонами, поэтому сборка занимает минуты, а не
+      # десятки минут, и не зависит от состояния сервера.
+      - name: backend
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/public-backend:${{ steps.meta.outputs.tag }},${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/public-backend:latest
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,scope=backend,mode=max
+
+      - name: frontend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          file: frontend/Dockerfile
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/public-frontend:${{ steps.meta.outputs.tag }},${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/public-frontend:latest
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,scope=frontend,mode=max
+
+      - name: admin-frontend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./admin-frontend
+          file: admin-frontend/Dockerfile
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/public-admin-frontend:${{ steps.meta.outputs.tag }},${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/public-admin-frontend:latest
+          cache-from: type=gha,scope=admin
+          cache-to: type=gha,scope=admin,mode=max
+
+  deploy:
+    name: Деплой на VPS
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    environment: production
+    steps:
+      - name: Настройка SSH
         run: |
           mkdir -p ~/.ssh
-          ssh-keyscan -p ${{ secrets.VPS_SSH_PORT || 22 }} -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/known_hosts
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+          ssh-keyscan -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null || true
 
-      - name: Отправка Telegram уведомления - Начало деплоя
-        # Temporarily disabled
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          COMMIT_SHA=$(git rev-parse --short HEAD)
-          COMMIT_MSG=$(git log -1 --pretty=%B)
-          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-            -d chat_id="${TELEGRAM_CHAT_ID}" \
-            -d text="🚀 Начало деплоя%0A%0A📦 Коммит: ${COMMIT_SHA}%0A📝 Сообщение: ${COMMIT_MSG}" \
-            -d parse_mode="HTML" || true
-
-      - name: Сохранение текущей версии перед деплоем
+      - name: Копирование конфигов
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
-          VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT || 22 }}
         run: |
-          echo "💾 Сохранение текущей версии перед деплоем..."
-          echo "✅ Используется путь: /root/public"
-          
-          ssh -p $VPS_SSH_PORT -o StrictHostKeyChecking=no $VPS_USER@$VPS_HOST bash << EOF
-            cd /root/public || exit 1
+          # На сервер уходит только конфигурация запуска. Исходный код на
+          # сервер не клонируется: он лежит в образах из GHCR, а на диске
+          # сервера не появляется копия репозитория, которую можно прочитать
+          # при компрометации.
+          ssh "$VPS_USER@$VPS_HOST" "mkdir -p $DEPLOY_DIR"
+          scp -o StrictHostKeyChecking=no \
+            docker-compose.yml docker-compose.prod.yml Caddyfile .env.example \
+            "$VPS_USER@$VPS_HOST:$DEPLOY_DIR/"
+          scp -o StrictHostKeyChecking=no deploy.sh \
+            "$VPS_USER@$VPS_HOST:$DEPLOY_DIR/deploy.sh"
+          ssh "$VPS_USER@$VPS_HOST" "chmod +x $DEPLOY_DIR/deploy.sh"
 
-            # Сохраняем текущий коммит в файл .previous_version
-            CURRENT_COMMIT=\$(git rev-parse HEAD 2>/dev/null || echo "")
-            if [ -n "\$CURRENT_COMMIT" ]; then
-              echo "\$CURRENT_COMMIT" > .previous_version
-              echo "✅ Сохранена версия: \$(git rev-parse --short HEAD)"
-            else
-              echo "⚠️  Git репозиторий не найден или пуст, пропускаем сохранение версии"
-            fi
-          EOF
-
-      - name: 🧨 ЯДЕРНАЯ ОЧИСТКА Docker (если нужно)
+      - name: Вход в GHCR на сервере
+        # Секрет опционален: если на сервере уже выполнен docker login,
+        # шаг пропускается. Нужен, когда креды протухли или сервер новый.
+        if: ${{ secrets.GHCR_PULL_TOKEN != '' }}
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
-          VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT || 22 }}
         run: |
-          echo "🧨 ЯДЕРНАЯ ОЧИСТКА Docker (только если образы заблокированы)..."
-          
-          # Проверяем, есть ли заблокированные образы
-          ssh -p $VPS_SSH_PORT -o StrictHostKeyChecking=no $VPS_USER@$VPS_HOST bash << 'NUCLEAR_CLEANUP'
-            set -e
-            
-            cd /root/public || exit 1
-            
-            echo "🔍 Проверка заблокированных образов..."
-            # Проверяем образы с :latest и с любыми тегами
-            BLOCKED_IMAGES=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "public-(backend|frontend|admin-frontend)" | wc -l || echo "0")
-            
-            if [ "$BLOCKED_IMAGES" -gt 0 ] 2>/dev/null; then
-              echo "⚠️  Найдено $BLOCKED_IMAGES заблокированных образов"
-              echo "🧨 ВЫПОЛНЯЕМ ПОЛНЫЙ СБРОС DOCKER..."
-              
-              # 1. ОСТАНАВЛИВАЕМ ВСЁ
-              echo "  1. Остановка всех контейнеров..."
-              docker compose down 2>/dev/null || true
-              docker stop $(docker ps -aq) 2>/dev/null || true
-              
-              # 2. УДАЛЯЕМ ВСЕ КОНТЕЙНЕРЫ
-              echo "  2. Удаление всех контейнеров..."
-              docker rm -f $(docker ps -aq) 2>/dev/null || true
-              
-              # 3. УДАЛЯЕМ ВСЕ ОБРАЗЫ (особенно :latest)
-              echo "  3. Удаление всех образов..."
-              # Сначала удаляем образы проекта с :latest
-              docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "public-(backend|frontend|admin-frontend):latest" | xargs -r docker rmi -f 2>/dev/null || true
-              # Затем все образы проекта
-              docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "public-(backend|frontend|admin-frontend)" | xargs -r docker rmi -f 2>/dev/null || true
-              # Затем все остальные образы
-              docker rmi -f $(docker images -q) 2>/dev/null || true
-              
-              # 4. ОЧИЩАЕМ ВСЕ VOLUMES (кроме важных данных)
-              echo "  4. Очистка volumes..."
-              docker volume prune -f || true
-              
-              # 5. ПОЛНЫЙ СБРОС DOCKER (ЯДЕРНОЕ РЕШЕНИЕ)
-              echo "  5. Полный сброс Docker (остановка службы)..."
-              systemctl stop docker || service docker stop || true
-              
-              echo "  6. Очистка директории Docker..."
-              # Удаляем только build cache и временные файлы, НЕ удаляем volumes
-              rm -rf /var/lib/docker/buildkit/* 2>/dev/null || true
-              rm -rf /var/lib/docker/tmp/* 2>/dev/null || true
-              rm -rf /var/lib/docker/overlay2/* 2>/dev/null || true
-              
-              echo "  7. Запуск Docker..."
-              systemctl start docker || service docker start || true
-              
-              echo "  8. Ожидание инициализации Docker..."
-              sleep 15
-              
-              # 9. ПРОВЕРЯЕМ
-              echo "  9. Проверка состояния Docker..."
-              docker info > /dev/null 2>&1 || {
-                echo "  ⚠️  Docker не запустился, ждем еще..."
-                sleep 10
-                docker info || echo "  ❌ Docker все еще не работает"
-              }
-              
-              echo "✅ Ядерная очистка завершена"
-            else
-              echo "✅ Заблокированных образов не найдено, пропускаем ядерную очистку"
-            fi
-          NUCLEAR_CLEANUP
+          ssh "$VPS_USER@$VPS_HOST" \
+            "echo '${{ secrets.GHCR_PULL_TOKEN }}' | docker login ghcr.io -u '${{ github.actor }}' --password-stdin"
 
-      - name: Deploy to VPS
+      - name: Деплой
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
-          VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT || 22 }}
-          UNIQUE_TAG: github-${{ github.run_id }}-${{ github.run_attempt }}
-          DEPLOY_ID: deploy-${{ github.run_id }}-${{ github.run_attempt }}
+          IMAGE_TAG: ${{ needs.build-and-push.outputs.tag }}
         run: |
-          echo "🚀 Начало деплоя на VPS..."
-          echo "✅ Используется путь: /root/public"
-          echo "🏷️  Уникальный тег: $UNIQUE_TAG"
-          echo "🆔 Уникальный ID деплоя: $DEPLOY_ID"
+          ssh -t "$VPS_USER@$VPS_HOST" "IMAGE_TAG=$IMAGE_TAG $DEPLOY_DIR/deploy.sh" || {
+            echo "::error::Деплой завершися ошибкой — смотри логи шага и $DEPLOY_DIR/deploy.log на сервере"
+            exit 1
+          }
 
-          # Выполнение команд деплоя через SSH с передачей переменных
-          ssh -p $VPS_SSH_PORT -o StrictHostKeyChecking=no $VPS_USER@$VPS_HOST bash << EOF
-            set -e  # Остановка при ошибках
-            
-            # Экспортируем уникальный тег и ID деплоя
-            export UNIQUE_TAG="$UNIQUE_TAG"
-            export DEPLOY_ID="$DEPLOY_ID"
-            echo "🏷️  Используется тег: \$UNIQUE_TAG"
-            echo "🆔 Используется ID деплоя: \$DEPLOY_ID"
-
-            # Переход в директорию проекта
-            cd /root/public || {
-              echo "❌ Ошибка: не удалось перейти в директорию /root/public"
-              exit 1
-            }
-
-            echo "📂 Текущая директория: \$(pwd)"
-
-            # Проверка наличия docker-compose.yml
-            if [ ! -f "docker-compose.yml" ]; then
-              echo "❌ Ошибка: docker-compose.yml не найден в \$(pwd)"
-              exit 1
-            fi
-
-            # Шаг 1: Получение последних изменений из Git
-            echo "📥 Получение изменений из Git..."
-            # Настраиваем стратегию слияния для git pull
-            git config pull.rebase false || true
-            git fetch origin || {
-              echo "❌ Ошибка при выполнении git fetch"
-              exit 1
-            }
-            # Пробуем pull с merge стратегией
-            git pull origin main --no-rebase || {
-              echo "⚠️  Ошибка при git pull, пробуем reset и pull..."
-              # Если есть конфликты, делаем hard reset
-              git reset --hard origin/main || {
-                echo "❌ Ошибка при выполнении git pull/reset"
-                exit 1
-              }
-            }
-            echo "✅ Код обновлен из репозитория"
-
-            # Шаг 2: ГАРАНТИРОВАННАЯ очистка всех контейнеров и сетей
-            echo "🛑 Глубокая очистка Docker..."
-            
-            # Останавливаем все контейнеры (включая скрытые)
-            echo "  Остановка всех контейнеров..."
-            docker stop $(docker ps -aq) 2>/dev/null || echo "  Нет запущенных контейнеров"
-            
-            # Удаляем все контейнеры
-            echo "  Удаление всех контейнеров..."
-            docker rm -f $(docker ps -aq) 2>/dev/null || echo "  Нет контейнеров для удаления"
-            
-            # Удаляем все сети (кроме встроенных)
-            echo "  Очистка сетей..."
-            docker network prune -f || true
-            
-            # Docker compose down для очистки compose-контейнеров
-            echo "  Docker compose down..."
-            docker compose down --remove-orphans 2>/dev/null || echo "  Compose не был запущен"
-            
-            # Полная очистка системы Docker
-            echo "  Полная очистка Docker system..."
-            docker system prune -a -f --volumes || echo "  Предупреждение: не удалось выполнить system prune"
-            
-            # Дополнительная очистка - удаление контейнеров по именам
-            echo "🧹 Дополнительная очистка по именам..."
-            for name in public-redis public-backend public-frontend public-admin-frontend public-redis-commander; do
-              echo "  Проверка контейнера: $name"
-              # Удаляем по имени
-              docker rm -f "$name" 2>/dev/null || true
-              # Удаляем по ID если имя не сработало
-              CONTAINER_ID=$(docker ps -aq --filter "name=^${name}$" 2>/dev/null)
-              if [ -n "$CONTAINER_ID" ]; then
-                echo "    Удаление по ID: $CONTAINER_ID"
-                docker rm -f "$CONTAINER_ID" 2>/dev/null || true
-              fi
-            done
-            
-            # Удаляем все контейнеры с "public" в имени
-            echo "  Удаление всех контейнеров с 'public' в имени..."
-            docker ps -a --format "{{.ID}} {{.Names}}" 2>/dev/null | grep -E "public" | awk '{print $1}' | while read -r id; do
-              if [ -n "$id" ]; then
-                echo "    Удаление контейнера по ID: $id"
-                docker rm -f "$id" 2>/dev/null || true
-              fi
-            done || true
-            
-            # Проверка что контейнеры удалены
-            echo "🔍 Проверка состояния после очистки..."
-            echo "  Контейнеры:"
-            docker ps -a || echo "  Ошибка при проверке контейнеров"
-            echo "  Сети:"
-            docker network ls || echo "  Ошибка при проверке сетей"
-
-            # Шаг 3: ПОЛНАЯ ОЧИСТКА Docker перед пересборкой
-            echo "🗑️  ПОЛНАЯ ОЧИСТКА Docker перед пересборкой..."
-            
-            # Останавливаем все контейнеры
-            echo "  Остановка всех контейнеров..."
-            docker compose down --remove-orphans 2>/dev/null || true
-            
-            # Удаляем все образы проекта через docker images | grep
-            echo "  Удаление всех образов проекта через grep..."
-            docker images | grep "public-" | awk '{print $3}' | xargs -r docker rmi -f 2>/dev/null || true
-            
-            # Используем docker compose down с удалением всех образов
-            echo "  Docker compose down --rmi all..."
-            docker compose down --rmi all --volumes --remove-orphans 2>/dev/null || true
-            
-            # Удаляем образы через docker images и xargs (более надежно)
-            echo "  Удаление всех образов с 'public' через docker images..."
-            docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "public-" | xargs -r docker rmi -f 2>/dev/null || true
-            docker images --format "{{.ID}} {{.Repository}}" | grep -E "public" | awk '{print $1}' | xargs -r docker rmi -f 2>/dev/null || true
-            
-            # Принудительное удаление образов по конкретным именам
-            for image in public-backend public-frontend public-admin-frontend; do
-              echo "  Принудительное удаление образа: $image"
-              # Пробуем удалить по полному имени с тегом
-              docker rmi -f "${image}:latest" 2>/dev/null || true
-              # Пробуем удалить без тега
-              docker rmi -f "$image" 2>/dev/null || true
-              # Пробуем найти и удалить по ID (все варианты)
-              docker images --format "{{.ID}} {{.Repository}}" | grep " ${image}$" | awk '{print $1}' | xargs -r docker rmi -f 2>/dev/null || true
-            done
-            
-            # ПОЛНАЯ очистка системы Docker
-            echo "  Полная очистка Docker system (prune -a -f --volumes)..."
-            docker system prune -a -f --volumes 2>/dev/null || echo "  Предупреждение: не удалось выполнить полную очистку"
-            
-            # Удаляем dangling images
-            echo "  Очистка dangling images..."
-            docker image prune -f || true
-            
-            # Очищаем build cache
-            echo "  Очистка build cache..."
-            docker builder prune -f || true
-            
-            # Финальная проверка и принудительное удаление
-            echo "  Финальная проверка образов..."
-            REMAINING_IMAGES=$(docker images --format "{{.Repository}}" | grep -E "public-" | wc -l || echo "0")
-            if [ -n "$REMAINING_IMAGES" ] && [ "$REMAINING_IMAGES" -gt 0 ] 2>/dev/null; then
-              echo "  ⚠️  Все еще осталось $REMAINING_IMAGES образов, принудительное удаление..."
-              # Пробуем удалить через docker image rm
-              docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "public-" | xargs -r docker image rm -f 2>/dev/null || true
-              # Пробуем удалить через ID
-              docker images --format "{{.ID}} {{.Repository}}" | grep -E "public-" | awk '{print $1}' | xargs -r docker image rm -f 2>/dev/null || true
-              # Последняя попытка через docker images | grep
-              docker images | grep "public-" | awk '{print $3}' | xargs -r docker rmi -f 2>/dev/null || true
-            fi
-            
-            # Показываем оставшиеся образы для диагностики
-            echo "  Список оставшихся образов:"
-            docker images | grep -E "public|REPOSITORY" || echo "  Нет образов с 'public'"
-            
-            # Шаг 5: Пересборка образов
-            echo "🔨 Пересборка Docker образов..."
-            # Финальная проверка образов перед сборкой
-            echo "  Финальная проверка образов перед сборкой..."
-            docker images | grep -E "public-|REPOSITORY" || echo "  Нет образов с 'public'"
-            # Если образы все еще есть, удаляем их принудительно
-            docker images | grep "public-" | awk '{print $3}' | xargs -r docker rmi -f 2>/dev/null || true
-            # Дополнительная очистка через docker image rm
-            docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "public-" | xargs -r docker image rm -f 2>/dev/null || true
-            
-            # КРИТИЧЕСКАЯ ОЧИСТКА: Удаляем образы по конкретным именам прямо перед сборкой
-            echo "  🔥 Финальное удаление образов по именам перед сборкой..."
-            for img_name in public-backend:latest public-frontend:latest public-admin-frontend:latest; do
-              echo "    Удаление образа: $img_name"
-              docker image rm -f "$img_name" 2>/dev/null || true
-              # Также пробуем удалить без тега
-              docker image rm -f "${img_name%:*}" 2>/dev/null || true
-              # Удаляем все варианты через ID
-              docker images --format "{{.ID}} {{.Repository}}:{{.Tag}}" | grep "$img_name" | awk '{print $1}' | xargs -r docker image rm -f 2>/dev/null || true
-            done
-            
-            # Проверка что образы удалены
-            echo "  Проверка удаления образов..."
-            REMAINING=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "public-(backend|frontend|admin-frontend):latest" | wc -l || echo "0")
-            if [ "$REMAINING" -gt 0 ] 2>/dev/null; then
-              echo "  ⚠️  Все еще осталось $REMAINING образов, принудительное удаление..."
-              docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "public-(backend|frontend|admin-frontend):latest" | xargs -r docker image rm -f 2>/dev/null || true
-            fi
-            echo "  ✅ Образы удалены перед сборкой"
-            
-            # КРИТИЧЕСКАЯ ОЧИСТКА: Удаляем все образы с тегом latest
-            echo "  🔥 Удаление всех образов с тегом :latest..."
-            docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "public-(backend|frontend|admin-frontend):latest" | xargs -r docker rmi -f 2>/dev/null || true
-            docker images --format "{{.ID}} {{.Repository}}:{{.Tag}}" | grep -E "public-(backend|frontend|admin-frontend).*latest" | awk '{print $1}' | xargs -r docker rmi -f 2>/dev/null || true
-            
-            # Проверяем что образы удалены
-            echo "  Проверка удаления образов :latest..."
-            docker images | grep -E "public-(backend|frontend|admin-frontend).*latest" || echo "  ✅ Образы :latest удалены"
-            
-            # КРИТИЧЕСКАЯ ОЧИСТКА: Удаляем ВСЕ образы с :latest перед сборкой
-            echo "  🔥 Финальное удаление всех образов :latest..."
-            docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "public-(backend|frontend|admin-frontend):latest" | xargs -r docker rmi -f 2>/dev/null || true
-            docker images --format "{{.ID}} {{.Repository}}:{{.Tag}}" | grep -E "public-(backend|frontend|admin-frontend).*latest" | awk '{print $1}' | xargs -r docker rmi -f 2>/dev/null || true
-            
-            # Добавляем переменные в существующий .env файл (Docker Compose автоматически читает .env)
-            echo "  📝 Добавление переменных в .env файл..."
-            # Сохраняем оригинальный .env если существует
-            if [ -f .env ]; then
-              cp .env .env.backup
-              # Добавляем или обновляем переменные
-              if grep -q "^UNIQUE_TAG=" .env; then
-                sed -i "s/^UNIQUE_TAG=.*/UNIQUE_TAG=\$UNIQUE_TAG/" .env
-              else
-                echo "UNIQUE_TAG=\$UNIQUE_TAG" >> .env
-              fi
-              if grep -q "^DEPLOY_ID=" .env; then
-                sed -i "s/^DEPLOY_ID=.*/DEPLOY_ID=\$DEPLOY_ID/" .env
-              else
-                echo "DEPLOY_ID=\$DEPLOY_ID" >> .env
-              fi
-            else
-              # Создаем новый .env файл
-              echo "UNIQUE_TAG=\$UNIQUE_TAG" > .env
-              echo "DEPLOY_ID=\$DEPLOY_ID" >> .env
-            fi
-            echo "  Переменные в .env (UNIQUE_TAG и DEPLOY_ID):"
-            grep -E "^(UNIQUE_TAG|DEPLOY_ID)=" .env || echo "  Переменные не найдены"
-            
-            # Сборка с повторными попытками при ошибках сети
-            echo "🔨 Сборка образов с тегом: \$UNIQUE_TAG и ID: \$DEPLOY_ID"
-            
-            # Экспортируем переменные в окружение (на всякий случай)
-            export UNIQUE_TAG="\$UNIQUE_TAG"
-            export DEPLOY_ID="\$DEPLOY_ID"
-            
-            # Проверяем что переменные будут использоваться
-            echo "  Проверка подстановки переменных в docker-compose.yml..."
-            docker compose config 2>&1 | grep -E "public-(backend|frontend|admin-frontend)" | head -5 || echo "  Не удалось проверить конфигурацию"
-            
-            # СБОРКА ОБРАЗОВ С ЯВНЫМ УКАЗАНИЕМ ТЕГОВ
-            # Docker Compose может игнорировать переменные при сборке, поэтому используем прямой docker build
-            echo "🔨 Сборка образов с явным указанием тегов..."
-            
-            # Сборка каждого образа отдельно с явным тегом
-            echo "  📦 Сборка backend..."
-            docker build -t "public-backend:\$UNIQUE_TAG" -f Dockerfile . --no-cache --pull || {
-              echo "  ❌ Ошибка сборки backend"
-              exit 1
-            }
-            
-            echo "  📦 Сборка frontend..."
-            docker build -t "public-frontend:\$UNIQUE_TAG" -f frontend/Dockerfile ./frontend --no-cache --pull || {
-              echo "  ❌ Ошибка сборки frontend"
-              exit 1
-            }
-            
-            echo "  📦 Сборка admin-frontend..."
-            docker build -t "public-admin-frontend:\$UNIQUE_TAG" -f admin-frontend/Dockerfile ./admin-frontend --no-cache --pull || {
-              echo "  ❌ Ошибка сборки admin-frontend"
-              exit 1
-            }
-            
-            echo "✅ Все образы собраны с тегом: \$UNIQUE_TAG"
-            
-            if [ "\$BUILD_SUCCESS" != "true" ]; then
-              echo "❌ Ошибка при пересборке образов после \$BUILD_ATTEMPTS попыток"
-              echo "📋 Последние ошибки сборки:"
-              tail -100 /tmp/build.log 2>/dev/null || echo "Не удалось прочитать лог сборки"
-              echo "📋 Финальная попытка удаления проблемных образов..."
-              docker images | grep "public-" | awk '{print \$3}' | xargs -r docker rmi -f 2>/dev/null || true
-              docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "public-" | xargs -r docker image rm -f 2>/dev/null || true
-              # Финальная критическая очистка образов :latest
-              echo "📋 Финальная критическая очистка образов :latest..."
-              docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "public-(backend|frontend|admin-frontend):latest" | xargs -r docker rmi -f 2>/dev/null || true
-              docker images | grep "public-.*latest" | awk '{print \$3}' | xargs -r docker rmi -f 2>/dev/null || true
-              # Финальная попытка сборки
-              export UNIQUE_TAG="\$UNIQUE_TAG"
-              export DEPLOY_ID="\$DEPLOY_ID"
-              COMPOSE_PROJECT_NAME=public docker compose build --no-cache --pull --progress=plain --force-rm || {
-                echo "❌ Ошибка при финальной пересборке образов"
-                echo "📋 Список всех образов:"
-                docker images | grep -E "public|REPOSITORY"
-                docker compose logs
-                exit 1
-              }
-            fi
-            
-            # Удаляем временный файл
-            rm -f .env.deploy
-            
-            # Удаляем временный файл
-            rm -f .env.deploy
-            echo "✅ Образы пересобраны"
-
-            # Финальная проверка и очистка перед запуском
-            echo "🔍 Финальная проверка контейнеров перед запуском..."
-            # Принудительное удаление всех контейнеров по именам
-            for name in public-redis public-backend public-frontend public-admin-frontend public-redis-commander; do
-              if docker ps -a --format "{{.Names}}" | grep -q "^${name}$"; then
-                echo "  ⚠️  Контейнер $name все еще существует, принудительное удаление..."
-                docker rm -f "$name" || true
-                # Дополнительная попытка удаления по ID, если имя не сработало
-                CONTAINER_ID=$(docker ps -a --filter "name=^${name}$" --format "{{.ID}}")
-                if [ -n "$CONTAINER_ID" ]; then
-                  echo "    Удаление по ID: $CONTAINER_ID"
-                  docker rm -f "$CONTAINER_ID" || true
-                fi
-              fi
-            done
-            
-            # Удаляем все контейнеры с "public" в имени еще раз для надежности
-            echo "  Финальная очистка всех контейнеров с 'public'..."
-            docker ps -a --format "{{.ID}} {{.Names}}" | grep "public" | awk '{print $1}' | while read -r id; do
-              if [ -n "$id" ]; then
-                echo "    Удаление контейнера по ID: $id"
-                docker rm -f "$id" || true
-              fi
-            done || true
-            
-            # Финальная очистка сетей
-            echo "  Финальная очистка сетей..."
-            docker network ls --format "{{.ID}} {{.Name}}" | grep "public" | awk '{print $1}' | while read -r network_id; do
-              if [ -n "$network_id" ]; then
-                echo "    Удаление сети по ID: $network_id"
-                docker network rm "$network_id" || true
-              fi
-            done || true
-
-            # Проверка конфигурации перед запуском
-            echo "🔍 Проверка docker-compose.yml..."
-            echo "=== Содержимое docker-compose.yml (секция redis) ==="
-            grep -A 15 "^  redis:" docker-compose.yml || echo "Секция redis не найдена"
-            
-            # Шаг 4: ГАРАНТИРОВАННАЯ ОЧИСТКА КОНТЕЙНЕРОВ ПЕРЕД ЗАПУСКОМ
-            echo "🧹 Принудительное удаление ВСЕХ старых контейнеров перед запуском..."
-            
-            # Удаляем через docker compose
-            docker compose down --remove-orphans 2>/dev/null || true
-            
-            # Удаляем каждый контейнер по отдельности
-            for container_name in public-frontend public-backend public-admin-frontend public-redis public-redis-commander; do
-              echo "  Удаляем контейнер: $container_name"
-              docker rm -f "$container_name" 2>/dev/null || true
-              # Также удаляем по ID если имя не сработало
-              CONTAINER_ID=$(docker ps -aq --filter "name=^${container_name}$" 2>/dev/null || echo "")
-              if [ -n "$CONTAINER_ID" ]; then
-                echo "    Удаление по ID: $CONTAINER_ID"
-                docker rm -f "$CONTAINER_ID" 2>/dev/null || true
-              fi
-            done
-            
-            # Удаляем все контейнеры с "public" в имени
-            docker ps -a --format "{{.ID}} {{.Names}}" 2>/dev/null | grep -E "public" | awk '{print $1}' | while read -r id; do
-              if [ -n "$id" ]; then
-                echo "    Удаление контейнера: $id"
-                docker rm -f "$id" 2>/dev/null || true
-              fi
-            done || true
-            
-            # Удаляем ВСЕ сети с "public" в имени
-            echo "  Удаление всех сетей проекта..."
-            docker network ls --format "{{.ID}} {{.Name}}" 2>/dev/null | grep -E "public" | awk '{print $1}' | while read -r network_id; do
-              if [ -n "$network_id" ]; then
-                echo "    Удаление сети: $network_id"
-                docker network rm "$network_id" 2>/dev/null || true
-              fi
-            done || true
-            
-            # Удаляем конкретную сеть по имени
-            docker network rm public_public-network 2>/dev/null || true
-            
-            echo "✅ Очистка контейнеров и сетей завершена"
-            
-            # Шаг 5: ГАРАНТИРОВАННАЯ ОЧИСТКА ВСЕХ КОНТЕЙНЕРОВ И СЕТЕЙ
-            echo "🧹 Финальная очистка перед запуском..."
-            
-            # Удаляем ВСЕ контейнеры с "public" в имени (включая Redis)
-            echo "  Удаление всех контейнеров проекта..."
-            docker ps -a --format "{{.ID}} {{.Names}}" 2>/dev/null | grep -E "public" | awk '{print $1}' | while read -r id; do
-              if [ -n "$id" ]; then
-                echo "    Удаление контейнера: $id"
-                docker rm -f "$id" 2>/dev/null || true
-              fi
-            done || true
-            
-            # Удаляем контейнеры по конкретным именам (на случай если grep не сработал)
-            for name in public-redis public-backend public-frontend public-admin-frontend public-redis-commander; do
-              echo "  Проверка и удаление: $name"
-              docker ps -a --format "{{.Names}}" | grep -q "^${name}$" && docker rm -f "$name" 2>/dev/null || true
-              # Также удаляем по ID
-              CONTAINER_ID=$(docker ps -aq --filter "name=^${name}$" 2>/dev/null || echo "")
-              if [ -n "$CONTAINER_ID" ]; then
-                echo "    Удаление по ID: $CONTAINER_ID"
-                docker rm -f "$CONTAINER_ID" 2>/dev/null || true
-              fi
-            done
-            
-            # Удаляем ВСЕ сети с "public" в имени
-            echo "  Удаление всех сетей проекта..."
-            docker network ls --format "{{.ID}} {{.Name}}" 2>/dev/null | grep -E "public" | awk '{print $1}' | while read -r network_id; do
-              if [ -n "$network_id" ]; then
-                echo "    Удаление сети: $network_id"
-                docker network rm "$network_id" 2>/dev/null || true
-              fi
-            done || true
-            
-            # Удаляем конкретную сеть по имени
-            docker network rm public_public-network 2>/dev/null || true
-            
-            echo "✅ Очистка завершена"
-            
-            # Шаг 6: Запуск всех сервисов вместе (Docker Compose сам разберется с зависимостями)
-            echo "🚀 Запуск всех сервисов..."
-            
-            # Запускаем все сервисы вместе (используем уже собранные образы, без пересборки)
-            # Убеждаемся что переменные в .env для правильных имен контейнеров
-            export UNIQUE_TAG="\$UNIQUE_TAG"
-            export DEPLOY_ID="\$DEPLOY_ID"
-            COMPOSE_PROJECT_NAME=public docker compose up -d --no-build --force-recreate --remove-orphans || {
-              echo "❌ Ошибка при запуске контейнеров"
-              echo "📋 Список всех контейнеров:"
-              docker ps -a
-              echo "📋 Статус compose:"
-              docker compose ps
-              
-              # Проверка .env файла
-              echo "📋 Проверка .env файла:"
-              if [ -f ".env" ]; then
-                echo "  ✅ .env файл существует"
-                echo "  Первые 5 строк (без секретов):"
-                head -5 .env | sed 's/=.*/=***/' || echo "  Не удалось прочитать .env"
-              else
-                echo "  ❌ .env файл НЕ НАЙДЕН!"
-              fi
-              
-              # Логи всех сервисов
-              echo "📋 Логи Redis:"
-              docker compose logs redis --tail=50 2>&1 || echo "Контейнер Redis не найден"
-              
-              echo "📋 Логи Backend:"
-              BACKEND_CONTAINER_NAME="public-backend\${DEPLOY_ID:+-${DEPLOY_ID}}"
-              docker compose logs backend --tail=100 2>&1 || {
-                echo "  Попытка найти backend контейнер..."
-                docker ps -a | grep backend || echo "  Backend контейнер не найден"
-                # Пробуем получить логи через docker logs
-                docker ps -a --format "{{.Names}}" | grep backend | head -1 | xargs -I {} docker logs {} --tail=100 2>&1 || echo "  Не удалось получить логи backend"
-              }
-              
-              echo "📋 Логи Frontend:"
-              docker compose logs frontend --tail=50 2>&1 || echo "Контейнер Frontend не найден"
-              
-              echo "📋 Логи Admin Frontend:"
-              docker compose logs admin-frontend --tail=50 2>&1 || echo "Контейнер Admin Frontend не найден"
-              
-              # Проверка статуса контейнеров
-              echo "📋 Детальный статус контейнеров:"
-              docker ps -a --format "table {{.Names}}\t{{.Status}}\t{{.ExitCode}}" | grep -E "NAMES|public" || docker ps -a
-              
-              echo "📋 Все логи compose:"
-              docker compose logs --tail=50
-              exit 1
-            }
-            
-            # Проверка статуса контейнеров после запуска
-            echo "⏳ Ожидание запуска контейнеров (30 секунд для инициализации)..."
-            sleep 30
-            
-            # Проверка здоровья Redis
-            echo "🔍 Проверка здоровья Redis..."
-            REDIS_HEALTHY=false
-            for i in {1..20}; do
-              # Используем docker compose ps для получения правильного имени контейнера
-              REDIS_CONTAINER=$(docker compose ps redis --format json 2>/dev/null | grep -o '"Name":"[^"]*"' | head -1 | cut -d'"' -f4 || echo "")
-              if [ -z "$REDIS_CONTAINER" ]; then
-                # Пробуем через docker compose ps без json
-                REDIS_CONTAINER=$(docker compose ps redis 2>/dev/null | tail -n +2 | awk '{print $1}' | head -1 || echo "")
-              fi
-              
-              # Проверяем через docker compose ps и grep (более надежно)
-              if docker compose ps redis 2>/dev/null | grep -q "healthy"; then
-                echo "  ✅ Redis здоров"
-                REDIS_HEALTHY=true
-                break
-              elif docker compose ps redis 2>/dev/null | grep -q "starting"; then
-                echo "  ⏳ Redis еще запускается... $i/20"
-              elif docker compose ps redis 2>/dev/null | grep -q "Up"; then
-                # Контейнер запущен, проверяем ping
-                echo "  ⏳ Redis запущен, проверяем ping... $i/20"
-                if docker compose exec -T redis redis-cli ping 2>/dev/null | grep -q "PONG"; then
-                  echo "  ✅ Redis отвечает на ping"
-                  REDIS_HEALTHY=true
-                  break
-                fi
-              else
-                echo "  ⏳ Ожидание запуска Redis... $i/20"
-              fi
-              sleep 2
-            done
-            
-            if [ "$REDIS_HEALTHY" != "true" ]; then
-              echo "  ⚠️  Redis не стал healthy, но продолжаем (может быть еще запускается)..."
-              echo "  📋 Логи Redis:"
-              docker compose logs redis --tail=20
-            fi
-            
-            echo "=== ПРОВЕРКА СТАТУСА ВСЕХ КОНТЕЙНЕРОВ ==="
-            docker compose ps
-            
-            # Проверяем каждый сервис отдельно
-            echo ""
-            echo "=== ДЕТАЛЬНАЯ ПРОВЕРКА СЕРВИСОВ ==="
-            for service in redis backend frontend admin-frontend redis-commander; do
-              echo ""
-              echo "--- Проверка $service ---"
-              if docker compose ps $service 2>/dev/null | grep -q "Up"; then
-                echo "✅ $service запущен"
-                echo "Последние 10 строк лога:"
-                docker compose logs --tail=10 $service 2>/dev/null || echo "Не удалось получить логи"
-              else
-                echo "❌ $service НЕ запущен или не найден"
-                echo "Полный лог:"
-                docker compose logs $service 2>/dev/null || echo "Не удалось получить логи"
-                # Пробуем получить логи через docker logs
-                CONTAINER_NAME="public-$service"
-                if docker ps -a --format "{{.Names}}" | grep -q "^${CONTAINER_NAME}$"; then
-                  echo "Логи через docker logs:"
-                  docker logs "$CONTAINER_NAME" 2>&1 | tail -20 || echo "Не удалось получить логи"
-                fi
-              fi
-            done
-            
-            # Проверка доступности сервисов
-            echo ""
-            echo "=== ПРОВЕРКА ДОСТУПНОСТИ СЕРВИСОВ ==="
-            
-            # Redis
-            echo "Проверка Redis..."
-            if docker compose exec -T redis redis-cli ping 2>/dev/null | grep -q "PONG"; then
-              echo "✅ Redis отвечает на ping"
-            else
-              echo "❌ Redis не отвечает на ping"
-              docker compose logs redis --tail=20
-            fi
-            
-            # Backend
-            echo "Проверка Backend..."
-            if docker compose exec -T backend curl -f http://localhost:8000/health 2>/dev/null > /dev/null; then
-              echo "✅ Backend health check прошел"
-            else
-              echo "⚠️  Backend health check не прошел (может быть еще запускается)"
-              docker compose logs backend --tail=20
-            fi
-            
-            # Показываем общий статус
-            echo ""
-            echo "=== ОБЩИЙ СТАТУС ==="
-            docker ps -a --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep -E "NAMES|public" || docker ps -a
-            echo "✅ Контейнеры запущены"
-
-            # Шаг 5: Ожидание запуска сервисов
-            echo "⏳ Ожидание запуска сервисов (60 секунд)..."
-            sleep 60
-
-            # Шаг 6: Проверка статуса контейнеров
-            echo "🔍 Проверка статуса контейнеров..."
-            docker compose ps
-
-            echo "✅ Деплой на VPS завершен"
-          EOF
-
-      - name: Health Check - Backend (с retry логикой)
-        id: health_backend
+      - name: Проверка доступности
         env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          BACKEND_PORT: ${{ secrets.BACKEND_PORT || '8000' }}
+          SITE_DOMAIN: ${{ vars.SITE_DOMAIN }}
         run: |
-          echo "🏥 Проверка здоровья Backend..."
-          max_attempts=30
-          attempt=1
-
-          while [ $attempt -le $max_attempts ]; do
-            if curl -f -s --max-time 5 "http://$VPS_HOST:$BACKEND_PORT/health" > /dev/null 2>&1; then
-              echo "✅ Backend здоров (попытка $attempt/$max_attempts)"
-              echo "backend_status=success" >> $GITHUB_OUTPUT
+          # Проверяем, что сайт отвечает по HTTPS. Если домен не задан в
+          # переменных репозитория — пропускаем (первый деплой до DNS).
+          if [ -z "$SITE_DOMAIN" ]; then
+            echo "SITE_DOMAIN не задан — проверка пропущена"
+            exit 0
+          fi
+          for i in $(seq 1 20); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "https://$SITE_DOMAIN/" || echo 000)
+            if [ "$code" = "200" ]; then
+              echo "https://$SITE_DOMAIN/ отвечает 200"
               exit 0
             fi
-            echo "⏳ Ожидание ответа от Backend (попытка $attempt/$max_attempts)..."
-            sleep 2
-            attempt=$((attempt + 1))
+            echo "попытка $i: код $code, ждём 10с"
+            sleep 10
           done
-
-          echo "❌ Backend не отвечает после $max_attempts попыток"
-          echo "backend_status=failed" >> $GITHUB_OUTPUT
+          echo "::error::https://$SITE_DOMAIN/ не отвечает 200 за 200 секунд"
           exit 1
-
-      - name: Health Check - Frontend (с retry логикой)
-        id: health_frontend
-        env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          FRONTEND_PORT: ${{ secrets.FRONTEND_PORT || '3000' }}
-        run: |
-          echo "🏥 Проверка здоровья Frontend..."
-          max_attempts=30
-          attempt=1
-
-          while [ $attempt -le $max_attempts ]; do
-            if curl -f -s --max-time 5 "http://$VPS_HOST:$FRONTEND_PORT" > /dev/null 2>&1; then
-              echo "✅ Frontend доступен (попытка $attempt/$max_attempts)"
-              echo "frontend_status=success" >> $GITHUB_OUTPUT
-              exit 0
-            fi
-            echo "⏳ Ожидание ответа от Frontend (попытка $attempt/$max_attempts)..."
-            sleep 2
-            attempt=$((attempt + 1))
-          done
-
-          echo "❌ Frontend не отвечает после $max_attempts попыток"
-          echo "frontend_status=failed" >> $GITHUB_OUTPUT
-          exit 1
-
-      - name: Health Check - Admin Frontend (с retry логикой)
-        id: health_admin
-        env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          ADMIN_FRONTEND_PORT: ${{ secrets.ADMIN_FRONTEND_PORT || '3001' }}
-        run: |
-          echo "🏥 Проверка здоровья Admin Frontend..."
-          max_attempts=30
-          attempt=1
-
-          while [ $attempt -le $max_attempts ]; do
-            if curl -f -s --max-time 5 "http://$VPS_HOST:$ADMIN_FRONTEND_PORT" > /dev/null 2>&1; then
-              echo "✅ Admin Frontend доступен (попытка $attempt/$max_attempts)"
-              echo "admin_status=success" >> $GITHUB_OUTPUT
-              exit 0
-            fi
-            echo "⏳ Ожидание ответа от Admin Frontend (попытка $attempt/$max_attempts)..."
-            sleep 2
-            attempt=$((attempt + 1))
-          done
-
-          echo "❌ Admin Frontend не отвечает после $max_attempts попыток"
-          echo "admin_status=failed" >> $GITHUB_OUTPUT
-          exit 1
-
-      - name: Очистка Docker (после успешного деплоя)
-        if: success()
-        env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_USER: ${{ secrets.VPS_USER }}
-          VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT || 22 }}
-        run: |
-          echo "🧹 Очистка неиспользуемых Docker ресурсов..."
-          ssh -p $VPS_SSH_PORT -o StrictHostKeyChecking=no $VPS_USER@$VPS_HOST bash << EOF
-            # Удаление неиспользуемых образов, контейнеров, сетей и volumes
-            # Используем -af для автоматического подтверждения и принудительного удаления
-            docker system prune -af || echo "⚠️  Предупреждение: не удалось очистить Docker"
-            echo "✅ Очистка Docker завершена"
-          EOF
-
-      - name: Отправка Telegram уведомления - Успешный деплой
-        # Temporarily disabled
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-        run: |
-          COMMIT_SHA=$(git rev-parse --short HEAD)
-          COMMIT_MSG=$(git log -1 --pretty=%B)
-          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-            -d chat_id="${TELEGRAM_CHAT_ID}" \
-            -d text="✅ Деплой успешно завершен%0A%0A📦 Коммит: ${COMMIT_SHA}%0A📝 Сообщение: ${COMMIT_MSG}%0A🌐 VPS: ${VPS_HOST}" \
-            -d parse_mode="HTML" || true
-
-      - name: Автоматический откат при ошибке
-        if: failure()
-        env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_USER: ${{ secrets.VPS_USER }}
-          VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT || 22 }}
-        run: |
-          echo "🔄 Начало автоматического отката к предыдущей версии..."
-          echo "✅ Используется путь: /root/public"
-
-          ssh -p $VPS_SSH_PORT -o StrictHostKeyChecking=no $VPS_USER@$VPS_HOST bash << EOF
-            set +e  # Не останавливаемся при ошибках, чтобы продолжить выполнение
-            cd /root/public || {
-              echo "❌ Ошибка: не удалось перейти в директорию /root/public"
-              exit 1
-            }
-
-            # Проверяем наличие файла с предыдущей версией
-            if [ ! -f ".previous_version" ]; then
-              echo "⚠️  Файл .previous_version не найден, откат невозможен"
-              exit 0  # Выходим без ошибки, так как это не критично
-            fi
-
-            PREVIOUS_COMMIT=\$(cat .previous_version)
-            if [ -z "\$PREVIOUS_COMMIT" ]; then
-              echo "⚠️  Предыдущая версия не найдена в .previous_version"
-              exit 0  # Выходим без ошибки, так как это не критично
-            fi
-
-            echo "📦 Откат к коммиту: \$(echo \$PREVIOUS_COMMIT | cut -c1-7)"
-
-            # Откатываем код к предыдущей версии
-            git fetch origin || {
-              echo "❌ Ошибка при выполнении git fetch"
-              exit 1
-            }
-            git checkout \$PREVIOUS_COMMIT || {
-              echo "❌ Ошибка при откате к коммиту \$PREVIOUS_COMMIT"
-              exit 1
-            }
-            echo "✅ Код откачен к предыдущей версии"
-
-            # ГАРАНТИРОВАННАЯ очистка всех контейнеров и сетей
-            echo "🛑 Глубокая очистка Docker..."
-            
-            # Останавливаем все контейнеры (включая скрытые)
-            echo "  Остановка всех контейнеров..."
-            docker stop $(docker ps -aq) 2>/dev/null || echo "  Нет запущенных контейнеров"
-            
-            # Удаляем все контейнеры
-            echo "  Удаление всех контейнеров..."
-            docker rm -f $(docker ps -aq) 2>/dev/null || echo "  Нет контейнеров для удаления"
-            
-            # Удаляем все сети (кроме встроенных)
-            echo "  Очистка сетей..."
-            docker network prune -f || true
-            
-            # Docker compose down для очистки compose-контейнеров
-            echo "  Docker compose down..."
-            docker compose down --remove-orphans 2>/dev/null || echo "  Compose не был запущен"
-            
-            # Полная очистка системы Docker
-            echo "  Полная очистка Docker system..."
-            docker system prune -a -f --volumes || echo "  Предупреждение: не удалось выполнить system prune"
-            
-            # Дополнительная очистка - удаление контейнеров по именам
-            echo "🧹 Дополнительная очистка по именам..."
-            for name in public-redis public-backend public-frontend public-admin-frontend public-redis-commander; do
-              echo "  Проверка контейнера: $name"
-              # Удаляем по имени
-              docker rm -f "$name" 2>/dev/null || true
-              # Удаляем по ID если имя не сработало
-              CONTAINER_ID=$(docker ps -aq --filter "name=^${name}$" 2>/dev/null)
-              if [ -n "$CONTAINER_ID" ]; then
-                echo "    Удаление по ID: $CONTAINER_ID"
-                docker rm -f "$CONTAINER_ID" 2>/dev/null || true
-              fi
-            done
-            
-            # Удаляем все контейнеры с "public" в имени
-            echo "  Удаление всех контейнеров с 'public' в имени..."
-            docker ps -a --format "{{.ID}} {{.Names}}" 2>/dev/null | grep -E "public" | awk '{print $1}' | while read -r id; do
-              if [ -n "$id" ]; then
-                echo "    Удаление контейнера по ID: $id"
-                docker rm -f "$id" 2>/dev/null || true
-              fi
-            done || true
-            
-            # Проверка что контейнеры удалены
-            echo "🔍 Проверка состояния после очистки..."
-            echo "  Контейнеры:"
-            docker ps -a || echo "  Ошибка при проверке контейнеров"
-            echo "  Сети:"
-            docker network ls || echo "  Ошибка при проверке сетей"
-
-            # ПОЛНАЯ ОЧИСТКА Docker перед пересборкой
-            echo "🗑️  ПОЛНАЯ ОЧИСТКА Docker перед пересборкой..."
-            
-            # Останавливаем все контейнеры
-            echo "  Остановка всех контейнеров..."
-            docker compose down --remove-orphans 2>/dev/null || true
-            
-            # Удаляем все образы проекта через docker images | grep
-            echo "  Удаление всех образов проекта через grep..."
-            docker images | grep "public-" | awk '{print $3}' | xargs -r docker rmi -f 2>/dev/null || true
-            
-            # Используем docker compose down с удалением всех образов
-            echo "  Docker compose down --rmi all..."
-            docker compose down --rmi all --volumes --remove-orphans 2>/dev/null || true
-            
-            # Удаляем образы через docker images и xargs (более надежно)
-            echo "  Удаление всех образов с 'public' через docker images..."
-            docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "public-" | xargs -r docker rmi -f 2>/dev/null || true
-            docker images --format "{{.ID}} {{.Repository}}" | grep -E "public" | awk '{print $1}' | xargs -r docker rmi -f 2>/dev/null || true
-            
-            # Принудительное удаление образов по конкретным именам
-            for image in public-backend public-frontend public-admin-frontend; do
-              echo "  Принудительное удаление образа: $image"
-              # Пробуем удалить по полному имени с тегом
-              docker rmi -f "${image}:latest" 2>/dev/null || true
-              # Пробуем удалить без тега
-              docker rmi -f "$image" 2>/dev/null || true
-              # Пробуем найти и удалить по ID (все варианты)
-              docker images --format "{{.ID}} {{.Repository}}" | grep " ${image}$" | awk '{print $1}' | xargs -r docker rmi -f 2>/dev/null || true
-            done
-            
-            # ПОЛНАЯ очистка системы Docker
-            echo "  Полная очистка Docker system (prune -a -f --volumes)..."
-            docker system prune -a -f --volumes 2>/dev/null || echo "  Предупреждение: не удалось выполнить полную очистку"
-            
-            # Удаляем dangling images
-            echo "  Очистка dangling images..."
-            docker image prune -f || true
-            
-            # Очищаем build cache
-            echo "  Очистка build cache..."
-            docker builder prune -f || true
-            
-            # Финальная проверка и принудительное удаление
-            echo "  Финальная проверка образов..."
-            REMAINING_IMAGES=$(docker images --format "{{.Repository}}" | grep -E "public-" | wc -l || echo "0")
-            if [ -n "$REMAINING_IMAGES" ] && [ "$REMAINING_IMAGES" -gt 0 ] 2>/dev/null; then
-              echo "  ⚠️  Все еще осталось $REMAINING_IMAGES образов, принудительное удаление..."
-              # Пробуем удалить через docker image rm
-              docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "public-" | xargs -r docker image rm -f 2>/dev/null || true
-              # Пробуем удалить через ID
-              docker images --format "{{.ID}} {{.Repository}}" | grep -E "public-" | awk '{print $1}' | xargs -r docker image rm -f 2>/dev/null || true
-              # Последняя попытка через docker images | grep
-              docker images | grep "public-" | awk '{print $3}' | xargs -r docker rmi -f 2>/dev/null || true
-            fi
-            
-            # Показываем оставшиеся образы для диагностики
-            echo "  Список оставшихся образов:"
-            docker images | grep -E "public|REPOSITORY" || echo "  Нет образов с 'public'"
-            
-            # Пересобираем образы для предыдущей версии
-            echo "🔨 Пересборка образов предыдущей версии..."
-            # Генерируем уникальный тег для rollback
-            export UNIQUE_TAG="rollback-\$(date +%Y%m%d-%H%M%S)"
-            echo "🏷️  Используется тег для rollback: \$UNIQUE_TAG"
-            
-            # Финальная проверка образов перед сборкой
-            echo "  Финальная проверка образов перед сборкой..."
-            docker images | grep -E "public-|REPOSITORY" || echo "  Нет образов с 'public'"
-            # Если образы все еще есть, удаляем их принудительно
-            docker images | grep "public-" | awk '{print $3}' | xargs -r docker rmi -f 2>/dev/null || true
-            docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "public-" | xargs -r docker image rm -f 2>/dev/null || true
-            
-            # КРИТИЧЕСКАЯ ОЧИСТКА: Удаляем все образы с тегом latest
-            echo "  🔥 Удаление всех образов с тегом :latest..."
-            docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "public-(backend|frontend|admin-frontend):latest" | xargs -r docker rmi -f 2>/dev/null || true
-            docker images --format "{{.ID}} {{.Repository}}:{{.Tag}}" | grep -E "public-(backend|frontend|admin-frontend).*latest" | awk '{print $1}' | xargs -r docker rmi -f 2>/dev/null || true
-            
-            # Генерируем уникальный ID для rollback
-            export DEPLOY_ID="rollback-\$(date +%Y%m%d-%H%M%S)"
-            
-            # СБОРКА ОБРАЗОВ С ЯВНЫМ УКАЗАНИЕМ ТЕГОВ
-            echo "🔨 Сборка образов с тегом: \$UNIQUE_TAG и ID: \$DEPLOY_ID"
-            
-            # Удаляем образы :latest перед сборкой
-            docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "public-(backend|frontend|admin-frontend):latest" | xargs -r docker rmi -f 2>/dev/null || true
-            
-            # Сборка каждого образа отдельно с явным тегом
-            echo "  📦 Сборка backend..."
-            docker build -t "public-backend:\$UNIQUE_TAG" -f Dockerfile . --no-cache --pull || {
-              echo "  ❌ Ошибка сборки backend"
-              exit 1
-            }
-            
-            echo "  📦 Сборка frontend..."
-            docker build -t "public-frontend:\$UNIQUE_TAG" -f frontend/Dockerfile ./frontend --no-cache --pull || {
-              echo "  ❌ Ошибка сборки frontend"
-              exit 1
-            }
-            
-            echo "  📦 Сборка admin-frontend..."
-            docker build -t "public-admin-frontend:\$UNIQUE_TAG" -f admin-frontend/Dockerfile ./admin-frontend --no-cache --pull || {
-              echo "  ❌ Ошибка сборки admin-frontend"
-              exit 1
-            }
-            
-            echo "✅ Все образы собраны с тегом: \$UNIQUE_TAG"
-
-            # Финальная проверка и очистка перед запуском
-            echo "🔍 Финальная проверка контейнеров перед запуском..."
-            
-            # Проверяем все контейнеры (включая скрытые через -aq)
-            echo "  Проверка всех контейнеров (включая скрытые)..."
-            ALL_CONTAINERS=$(docker ps -aq 2>/dev/null || echo "")
-            if [ -n "$ALL_CONTAINERS" ]; then
-              echo "  ⚠️  Найдены контейнеры, которые не были удалены:"
-              docker ps -a
-              echo "  Принудительное удаление всех оставшихся контейнеров..."
-              echo "$ALL_CONTAINERS" | xargs -r docker rm -f 2>/dev/null || true
-            fi
-            
-            # Удаляем все контейнеры с "public" в имени (включая остановленные)
-            echo "  Удаление всех контейнеров с 'public' в имени..."
-            docker ps -a --format "{{.ID}} {{.Names}} {{.Status}}" 2>/dev/null | grep -E "public" | while read -r line; do
-              if [ -n "$line" ]; then
-                CONTAINER_ID=$(echo "$line" | awk '{print $1}')
-                CONTAINER_NAME=$(echo "$line" | awk '{print $2}')
-                echo "    Удаление: $CONTAINER_NAME (ID: $CONTAINER_ID, Status: $(echo "$line" | awk '{for(i=3;i<=NF;i++) printf "%s ", $i; print ""}'))"
-                docker rm -f "$CONTAINER_ID" 2>/dev/null || docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
-              fi
-            done || true
-            
-            # Дополнительная проверка по конкретным именам и ID
-            for name in public-redis public-backend public-frontend public-admin-frontend public-redis-commander; do
-              # Проверяем по имени
-              if docker ps -a --format "{{.Names}}" 2>/dev/null | grep -q "^${name}$"; then
-                echo "  ⚠️  Контейнер $name все еще существует после очистки, принудительное удаление..."
-                docker rm -f "$name" 2>/dev/null || true
-              fi
-              # Проверяем по ID
-              CONTAINER_ID=$(docker ps -aq --filter "name=^${name}$" 2>/dev/null)
-              if [ -n "$CONTAINER_ID" ]; then
-                echo "    Удаление по ID: $CONTAINER_ID"
-                docker rm -f "$CONTAINER_ID" 2>/dev/null || true
-              fi
-            done
-            
-            # Финальная проверка - если контейнеры все еще есть, используем system prune
-            REMAINING=$(docker ps -aq 2>/dev/null | wc -l)
-            if [ "$REMAINING" -gt 0 ]; then
-              echo "  ⚠️  Все еще осталось $REMAINING контейнеров, выполняется system prune..."
-              docker system prune -af --volumes 2>/dev/null || true
-            fi
-            
-            # Проверка конфигурации перед запуском
-            echo "🔍 Проверка docker-compose.yml..."
-            echo "=== Содержимое docker-compose.yml (секция redis) ==="
-            grep -A 15 "^  redis:" docker-compose.yml || echo "Секция redis не найдена"
-            
-            # ГАРАНТИРОВАННАЯ ОЧИСТКА КОНТЕЙНЕРОВ ПЕРЕД ЗАПУСКОМ
-            echo "🧹 Принудительное удаление ВСЕХ старых контейнеров перед запуском rollback..."
-            
-            # Удаляем через docker compose
-            docker compose down --remove-orphans 2>/dev/null || true
-            
-            # Удаляем каждый контейнер по отдельности
-            for container_name in public-frontend public-backend public-admin-frontend public-redis public-redis-commander; do
-              echo "  Удаляем контейнер: $container_name"
-              docker rm -f "$container_name" 2>/dev/null || true
-              # Также удаляем по ID если имя не сработало
-              CONTAINER_ID=$(docker ps -aq --filter "name=^${container_name}$" 2>/dev/null || echo "")
-              if [ -n "$CONTAINER_ID" ]; then
-                echo "    Удаление по ID: $CONTAINER_ID"
-                docker rm -f "$CONTAINER_ID" 2>/dev/null || true
-              fi
-            done
-            
-            # Удаляем все контейнеры с "public" в имени
-            docker ps -a --format "{{.ID}} {{.Names}}" 2>/dev/null | grep -E "public" | awk '{print $1}' | while read -r id; do
-              if [ -n "$id" ]; then
-                echo "    Удаление контейнера: $id"
-                docker rm -f "$id" 2>/dev/null || true
-              fi
-            done || true
-            
-            # Удаляем ВСЕ сети с "public" в имени
-            echo "  Удаление всех сетей проекта..."
-            docker network ls --format "{{.ID}} {{.Name}}" 2>/dev/null | grep -E "public" | awk '{print $1}' | while read -r network_id; do
-              if [ -n "$network_id" ]; then
-                echo "    Удаление сети: $network_id"
-                docker network rm "$network_id" 2>/dev/null || true
-              fi
-            done || true
-            
-            # Удаляем конкретную сеть по имени
-            docker network rm public_public-network 2>/dev/null || true
-            
-            echo "✅ Очистка контейнеров и сетей завершена"
-            
-            # Запускаем контейнеры
-            # Запуск всех сервисов вместе (Docker Compose сам разберется с зависимостями)
-            echo "🚀 Запуск контейнеров предыдущей версии..."
-            
-            # Дополнительная проверка что Redis контейнер удален
-            echo "  🔍 Финальная проверка Redis контейнера..."
-            if docker ps -a --format "{{.Names}}" | grep -q "^public-redis$"; then
-              echo "  ⚠️  Redis контейнер все еще существует, принудительное удаление..."
-              docker stop public-redis 2>/dev/null || true
-              docker rm -f public-redis 2>/dev/null || true
-              # Также удаляем по ID
-              REDIS_ID=$(docker ps -aq --filter "name=^public-redis$" 2>/dev/null || echo "")
-              if [ -n "$REDIS_ID" ]; then
-                echo "    Удаление Redis по ID: $REDIS_ID"
-                docker rm -f "$REDIS_ID" 2>/dev/null || true
-              fi
-            fi
-            
-            # Запускаем все сервисы вместе (используем уже собранные образы, без пересборки)
-            export UNIQUE_TAG="\$UNIQUE_TAG"
-            export DEPLOY_ID="\$DEPLOY_ID"
-            COMPOSE_PROJECT_NAME=public docker compose up -d --no-build --force-recreate --remove-orphans || {
-              echo "❌ Ошибка при запуске контейнеров"
-              echo "📋 Список всех контейнеров:"
-              docker ps -a
-              echo "📋 Статус compose:"
-              docker compose ps
-              echo "📋 Логи Redis (если контейнер существует):"
-              docker logs public-redis 2>&1 || echo "Контейнер public-redis не найден"
-              echo "📋 Попытка запуска Redis вручную для диагностики:"
-              docker run -d --name test-redis-diagnostic redis:7-alpine redis-server --appendonly yes || echo "Не удалось запустить тестовый Redis"
-              sleep 3
-              docker logs test-redis-diagnostic 2>&1 || echo "Не удалось получить логи тестового Redis"
-              docker stop test-redis-diagnostic 2>/dev/null || true
-              docker rm test-redis-diagnostic 2>/dev/null || true
-              echo "📋 Все логи:"
-              docker compose logs
-              exit 1
-            }
-            
-            # Проверка статуса контейнеров после запуска
-            echo "⏳ Ожидание запуска контейнеров (5 секунд)..."
-            sleep 5
-            echo "📋 Статус контейнеров после запуска:"
-            docker ps -a --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep -E "NAMES|public" || docker ps -a
-            echo "📋 Логи Redis после запуска:"
-            docker logs public-redis 2>&1 || echo "Контейнер public-redis не найден или не запущен"
-
-            echo "⏳ Ожидание запуска сервисов (60 секунд)..."
-            sleep 60
-
-            echo "✅ Откат к предыдущей версии завершен"
-          EOF
-
-      - name: Отправка Telegram уведомления - Ошибка деплоя с откатом
-        # Temporarily disabled
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_USER: ${{ secrets.VPS_USER }}
-          VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT || 22 }}
-        run: |
-          COMMIT_SHA=$(git rev-parse --short HEAD)
-          COMMIT_MSG=$(git log -1 --pretty=%B)
-
-          # Проверяем, был ли выполнен откат (проверяем наличие файла на VPS)
-          ROLLBACK_STATUS="🔄 Откат выполнен к предыдущей версии"
-
-          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-            -d chat_id="${TELEGRAM_CHAT_ID}" \
-            -d text="❌ Деплой не удался%0A%0A📦 Коммит: ${COMMIT_SHA}%0A📝 Сообщение: ${COMMIT_MSG}%0A🌐 VPS: ${VPS_HOST}%0A%0A${ROLLBACK_STATUS}" \
-            -d parse_mode="HTML" || true
-
-      - name: Deployment Summary
-        if: success()
-        run: |
-          echo "## ✅ Деплой успешно завершен!" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "🚀 Все сервисы развернуты и проверены:" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Backend: http://${{ secrets.VPS_HOST }}:${{ secrets.BACKEND_PORT || '8000' }}" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Frontend: http://${{ secrets.VPS_HOST }}:${{ secrets.FRONTEND_PORT || '3000' }}" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Admin Frontend: http://${{ secrets.VPS_HOST }}:${{ secrets.ADMIN_FRONTEND_PORT || '3001' }}" >> $GITHUB_STEP_SUMMARY
-
-      - name: Deployment Failed Summary
-        if: failure()
-        run: |
-          echo "## ❌ Деплой не удался" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Проверьте логи выше для выяснения причины ошибки." >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "🔄 Автоматический откат к предыдущей версии выполнен (если была сохранена предыдущая версия)." >> $GITHUB_STEP_SUMMARY
