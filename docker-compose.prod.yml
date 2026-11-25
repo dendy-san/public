@@ -27,7 +27,7 @@
 services:
   redis:
     # В prod пароль обязателен: без него Redis открыт любой docker-сети,
-# а на прошлом сервере именно это привело к блокировке от хостера.
+    # а на прошлом сервере именно это привело к блокировке от хостера.
     environment:
       - REDIS_PASSWORD=${REDIS_PASSWORD:?REDIS_PASSWORD обязателен в production}
 

@@ -6,14 +6,18 @@
 
 # Клиентский сайт: SPA + reverse-proxy API внутри nginx контейнера frontend.
 #
-# nginx во frontend проксирует /llm, /payment, /session, /admin, /health на
+# nginx во frontend проксирует /llm, /payment, /session, /health на
 # backend:8000, поэтому отдельный маршрут для API здесь не нужен — webhook
 # ЮKassa (/payment/webhook) приходит этим же путём.
+#
+# www указан вторым именем в этом же блоке: запись www в DNS есть, и без неё
+# запрос к www.artifigence.ru падал бы с ошибкой подбора сайта, а не работал
+# бы как основной сайт.
 #
 # Реальный IP клиента: Caddy проставляет X-Forwarded-For автоматически,
 # nginx добавляет к нему свой адрес, а _client_ip() в backend берёт первую
 # запись. Без этого в лидах писались бы внутренние адреса docker (172.x).
-{$SITE_DOMAIN} {
+{$SITE_DOMAIN}, www.{$SITE_DOMAIN} {
 	encode zstd gzip
 
 	# HSTS: после первого визита браузер ходит только по HTTPS.
