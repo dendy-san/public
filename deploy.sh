@@ -43,6 +43,19 @@ for var in REDIS_PASSWORD ADMIN_TOKEN SITE_DOMAIN ADMIN_DOMAIN; do
   fi
 done
 
+# Пароль Redis подставляется в REDIS_URL (redis://:<пароль>@redis:6379/0), и
+# redis-py разбирает это значение как URL: '/', ':' или '@' внутри пароля
+# ломают разбор — приложение падает с "Port could not be cast to integer
+# value as ...". Redis при этом отвечает, healthcheck проходит, и контейнеры
+# выглядят здоровыми, а работа с параметрами, сессиями и лимитами молча
+# не работает. Разрешаем только буквы и цифры: энтропия не страдает
+# (openssl rand -hex 24 даёт те же 96 бит).
+if ! grep -qE '^REDIS_PASSWORD=[A-Za-z0-9]{16,}$' .env; then
+  log "ОШИБКА: REDIS_PASSWORD должен состоять только из латинских букв и цифр"
+  log "и быть не короче 16 символов. Сгенерируйте новый: openssl rand -hex 24"
+  exit 1
+fi
+
 PREVIOUS_TAG="$(cat "$TAG_FILE" 2>/dev/null || echo "")"
 log "Деплой: тег ${IMAGE_TAG} (предыдущий: ${PREVIOUS_TAG:-нет})"
 
@@ -66,13 +79,17 @@ fi
 log "Ожидание здоровых контейнеров..."
 healthy=false
 for i in $(seq 1 40); do
-  # Проверяем, что все контейнеры стека в состоянии healthy, а не просто
-  # запущены: backend поднимается и ждёт Redis, поэтому сразу после up
-  # часть контейнеров ещё в starting.
+  # Требовать «все контейнеры healthy» нельзя: у caddy healthcheck не задан,
+  # и его статус всегда выглядит как "Up 7 minutes" без пометки о здоровье.
+  # Прежняя проверка («в каждой строке есть healthy или running») поэтому не
+  # выполнялась никогда, и деплой падал по таймауту уже после того, как стек
+  # успешно поднялся. Проверяем иначе: все контейнеры запущены (Up) и ни один
+  # не в unhealthy или health: starting.
   statuses="$("${COMPOSE[@]}" ps --format '{{.Status}}' 2>/dev/null || true)"
   total="$(printf '%s\n' "$statuses" | grep -c . || true)"
-  bad="$(printf '%s\n' "$statuses" | grep -Ecv 'healthy|running' || true)"
-  if [ "${total:-0}" -ge 5 ] && [ "${bad:-1}" -eq 0 ]; then
+  not_up="$(printf '%s\n' "$statuses" | grep -Evc '^Up' || true)"
+  not_ready="$(printf '%s\n' "$statuses" | grep -Ec 'unhealthy|starting' || true)"
+  if [ "${total:-0}" -ge 5 ] && [ "${not_up:-1}" -eq 0 ] && [ "${not_ready:-1}" -eq 0 ]; then
     healthy=true
     log "Все контейнеры здоровы (попытка $i)"
     break
