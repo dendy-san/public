@@ -119,15 +119,24 @@ jobs:
           ssh "$VPS_USER@$VPS_HOST" "chmod +x $DEPLOY_DIR/deploy.sh"
 
       - name: Вход в GHCR на сервере
-        # Секрет опционален: если на сервере уже выполнен docker login,
-        # шаг пропускается. Нужен, когда креды протухли или сервер новый.
-        if: ${{ secrets.GHCR_PULL_TOKEN != '' }}
+        # Контекст secrets недоступен в условии if на уровне шага (только в
+        # env и with), поэтому проверка перенесена внутрь run.
+        #
+        # Шаг опционален: если пакеты сделаны публичными, сервер скачивает
+        # образы без логина и переменная может быть не задана.
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
+          GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
         run: |
-          ssh "$VPS_USER@$VPS_HOST" \
-            "echo '${{ secrets.GHCR_PULL_TOKEN }}' | docker login ghcr.io -u '${{ github.actor }}' --password-stdin"
+          if [ -z "$GHCR_PULL_TOKEN" ]; then
+            echo "GHCR_PULL_TOKEN не задан — пропускаю (подходит для публичных пакетов)"
+            exit 0
+          fi
+          # Токен передаётся по stdin, а не как аргумент команды: иначе он
+          # засветился бы в выводе ps на сервере и в логе шага.
+          printf '%s' "$GHCR_PULL_TOKEN" | ssh "$VPS_USER@$VPS_HOST" \
+            "docker login ghcr.io -u '${{ github.actor }}' --password-stdin"
 
       - name: Деплой
         env:
