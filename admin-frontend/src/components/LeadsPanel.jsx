@@ -120,11 +120,16 @@ function LeadsPanel() {
             <TrendingUp className="w-5 h-5 text-indigo-600" />
             Воронка
           </h2>
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4">
             {[
               { label: 'Всего лидов', value: funnel.total },
               { label: 'Новые', value: funnel.new },
-              { label: 'Оплачено', value: funnel.paid },
+              // «Оплатили» — все, кто когда-либо заплатил, включая тех, у кого
+              // сеанс уже истёк. Отдельная плитка «Активны» показывает, у кого
+              // доступ ещё действует: раньше «Оплачено» означало именно это и
+              // после истечения сеанса деньги пропадали из выручки.
+              { label: 'Оплатили', value: funnel.paid_total ?? funnel.paid },
+              { label: 'Активны', value: funnel.paid },
               { label: 'Истекло', value: funnel.expired },
               { label: 'Выручка, ₽', value: funnel.revenue },
               { label: 'Конверсия', value: `${funnel.conversion_pct}%` },

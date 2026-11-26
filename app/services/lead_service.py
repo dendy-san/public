@@ -144,13 +144,20 @@ class LeadService:
             lead = Lead(email=email, created_at=now, pays=0, source="")
             db.add(lead)
 
+        # Идемпотентность: ЮKassa повторяет webhook, пока не получит 200, а
+        # фронт параллельно опрашивает /payment/status. Оба пути ведут сюда,
+        # поэтому по одному и тому же платежу счётчик оплат не наращиваем —
+        # иначе pays показывал бы 2-3 при единственной оплате.
+        is_same_payment = bool(payment_id) and lead.payment_id == payment_id
+
         lead.status = "paid"
         lead.paid_at = now
         if payment_id:
             lead.payment_id = payment_id
         if amount is not None:
             lead.amount = amount
-        lead.pays = (lead.pays or 0) + 1
+        if not is_same_payment:
+            lead.pays = (lead.pays or 0) + 1
         # С момента оплаты срок хранения считаем по более длинному основанию.
         lead.delete_after = now + timedelta(days=RETENTION_PAID_DAYS)
 
@@ -248,12 +255,20 @@ class LeadService:
         """
         Счётчики воронки. Ради них таблица и заведена: список сам по себе
         бесполезен, важна конверсия email -> оплата.
+
+        Важно: выручку и конверсию считаем по paid_at, а не по текущему
+        статусу. Когда сеанс истекает, mark_expired переводит статус в
+        expired, и подсчёт по статусу обнулял бы деньги за уже оплаченные
+        заказы: клиент заплатил, а в отчёте выручка 0.
         """
         total = db.query(Lead).count()
+        # Активные сеансы (статус paid) — отдельная плитка.
         paid = db.query(Lead).filter(Lead.status == "paid").count()
         new = db.query(Lead).filter(Lead.status == "new").count()
         expired = db.query(Lead).filter(Lead.status == "expired").count()
-        revenue = db.query(Lead).filter(Lead.status == "paid").with_entities(
+        # Все, кто когда-либо оплатил, независимо от того, истёк ли сеанс.
+        paid_total = db.query(Lead).filter(Lead.paid_at.isnot(None)).count()
+        revenue = db.query(Lead).filter(Lead.paid_at.isnot(None)).with_entities(
             Lead.amount
         ).all()
         revenue_sum = sum((r[0] or 0) for r in revenue)
@@ -265,10 +280,11 @@ class LeadService:
             "total": total,
             "new": new,
             "paid": paid,
+            "paid_total": paid_total,
             "expired": expired,
             "revenue": revenue_sum,
             "consented": consented,
-            "conversion_pct": round(paid / total * 100, 1) if total else 0.0,
+            "conversion_pct": round(paid_total / total * 100, 1) if total else 0.0,
         }
 
     def export_csv(
