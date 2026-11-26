@@ -75,6 +75,14 @@ const EmailCheck = ({ onSessionValid, backendUrl = import.meta.env.VITE_API_URL 
           </p>
         </div>
 
+        <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+          <p className="text-xs text-blue-800 leading-relaxed">
+            Email используется для привязки вашего сеанса доступа.
+            После оплаты доступ сохраняется по этому адресу — вы сможете вернуться
+            к работе, введя тот же email, даже если закроете вкладку.
+          </p>
+        </div>
+
         <form onSubmit={handleCheck} className="space-y-4">
           <div>
             <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-2">

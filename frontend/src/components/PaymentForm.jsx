@@ -395,6 +395,22 @@ const PaymentForm = ({ email, onPaymentSuccess, onClose, backendUrl = import.met
               <span>Экспорт результатов в DOCX</span>
             </li>
           </ul>
+
+          <div className="mt-4 space-y-2">
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg">
+              <p className="text-xs text-amber-800 leading-relaxed">
+                ⏱ <strong>Важно:</strong> время начинает отсчитываться сразу после успешной оплаты.
+                Рекомендуем сразу перейти к анализу сайта, чтобы не терять время.
+              </p>
+            </div>
+            <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg">
+              <p className="text-xs text-blue-800 leading-relaxed">
+                🎨 <strong>Каждый стиль расходуется однократно.</strong>
+                После генерации постов в выбранном стиле, этот стиль больше недоступен.
+                Выбирайте стиль осознанно.
+              </p>
+            </div>
+          </div>
         </div>
       </div>
     </motion.div>

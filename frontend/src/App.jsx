@@ -646,6 +646,10 @@ function App() {
                     <p className="text-gray-600">
                       {sessionEndModal.message}
                     </p>
+                    <p className="text-sm text-gray-500 mt-3">
+                      Для продолжения работы оплатите новый сеанс.
+                      Все стили начнут отсчёт заново.
+                    </p>
                   </div>
                   
                   <div className="mt-6">
@@ -655,7 +659,7 @@ function App() {
                       whileHover={{ scale: 1.02 }}
                       whileTap={{ scale: 0.98 }}
                     >
-                      Понятно
+                      Оплатить новый сеанс
                     </motion.button>
                   </div>
                 </div>
@@ -664,6 +668,20 @@ function App() {
           </>
         )}
       </main>
+
+      {/* Footer */}
+      <footer className="border-t border-gray-200 bg-white mt-12">
+        <div className="max-w-4xl mx-auto px-4 py-6 text-center text-sm text-gray-500">
+          <p>
+            <a href="/help.html" className="text-primary-600 hover:underline">Справка</a>
+            {' · '}
+            <a href="/privacy.html" target="_blank" rel="noopener noreferrer" className="text-primary-600 hover:underline">Политика конфиденциальности</a>
+            {' · '}
+            <a href="/offer.html" target="_blank" rel="noopener noreferrer" className="text-primary-600 hover:underline">Публичная оферта</a>
+          </p>
+          <p className="mt-1">© 2026 Генератор постов</p>
+        </div>
+      </footer>
     </div>
   )
 }
